@@ -6,18 +6,167 @@ local ModuleUrls = {
     tracer = "https://raw.githubusercontent.com/krispykills1914-sketch/probablyhereorsomethinghahahhaa/main/tracer.lua",
 }
 
-local function loadRemote(name)
-    local url = ModuleUrls[name]
-    if type(url) ~= "string" or url:find("YOUR_HOST", 1, true) then
-        warn("[Tapology]", name, "url is not set")
+local function patchLibrary(src)
+    src = src:gsub("\r\n", "\n")
+    local function swap(old, new)
+        old = old:gsub("\r\n", "\n")
+        new = new:gsub("\r\n", "\n")
+        local i, j = string.find(src, old, 1, true)
+        if not i then
+            return false
+        end
+        src = string.sub(src, 1, i - 1) .. new .. string.sub(src, j + 1)
+        return true
+    end
+    local hits = {}
+    if swap([=[function UI.Draggable(frame, handle)
+    handle = handle or frame
+    local dragging, startMouse, startPosition
+    connect(handle.InputBegan, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging, startMouse, startPosition = true, input.Position, frame.Position
+        end
+    end)
+    connect(UserInputService.InputEnded, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    connect(UserInputService.InputChanged, function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - startMouse
+            frame.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+        end
+    end)
+end]=], [=[local dragJobs = {}
+local dragBound = false
+local function bindDrag()
+    if dragBound then
         return
     end
-    local ok, src = pcall(function()
-        return game:HttpGet(url)
+    dragBound = true
+    connect(RunService.RenderStepped, function()
+        for frame, job in dragJobs do
+            local pending = job.pending
+            if job.dragging and pending and job.startMouse and job.startPosition then
+                job.pending = nil
+                local delta = pending - job.startMouse
+                if delta.X ~= 0 or delta.Y ~= 0 then
+                    local pos = job.startPosition
+                    frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
+                end
+            end
+        end
     end)
-    if not ok or type(src) ~= "string" or #src < 20 then
-        warn("[Tapology]", name, "download failed:", src)
+end
+function UI.Draggable(frame, handle)
+    handle = handle or frame
+    local job = dragJobs[frame]
+    if not job then
+        job = { dragging = false }
+        dragJobs[frame] = job
+        bindDrag()
+    end
+    local function apply()
+        local pending = job.pending
+        if job.dragging and pending and job.startMouse and job.startPosition then
+            job.pending = nil
+            local delta = pending - job.startMouse
+            local pos = job.startPosition
+            frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
+        end
+    end
+    connect(handle.InputBegan, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if not job.dragging then
+                job.dragging = true
+                job.startMouse = input.Position
+                job.startPosition = frame.Position
+                job.pending = nil
+            end
+        end
+    end)
+    connect(UserInputService.InputEnded, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            apply()
+            job.dragging = false
+            job.pending = nil
+        end
+    end)
+    connect(UserInputService.InputChanged, function(input)
+        if job.dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            job.pending = input.Position
+        end
+    end)
+end]=]) then
+        hits[#hits + 1] = "drag"
+    end
+    if swap('    connect(frame:GetPropertyChangedSignal("AbsolutePosition"), fit)\n', "") then
+        hits[#hits + 1] = "guides"
+    end
+    if swap('        connect(box:GetPropertyChangedSignal("AbsolutePosition"), refit)\n', "") then
+        hits[#hits + 1] = "list"
+    end
+    if swap('                connect(page:GetPropertyChangedSignal("AbsoluteSize"), refit)\n', '                connect(page:GetPropertyChangedSignal("AbsoluteSize"), refit)\n                connect(page:GetPropertyChangedSignal("CanvasPosition"), refit)\n') then
+        hits[#hits + 1] = "scroll"
+    end
+    getgenv()._TapologyLibraryPatch = table.concat(hits, ",")
+    return src
+end
+
+local ModuleRoot = "c:/Users/1223/Downloads/roblox resources/Tapology Resources/Visuals/modules"
+
+local function moduleAlreadyLoaded(name)
+    if name == "library" then
+        local ui = getgenv().Tapology or getgenv().Library
+        return type(ui) == "table" and type(ui.Unload) == "function" and ui.Gui ~= nil
+    elseif name == "weather" then
+        return type(getgenv().Weather) == "table" and type(getgenv().Weather.SetMode) == "function"
+    elseif name == "hiteffect" then
+        return type(getgenv().HitEffects) == "table"
+    elseif name == "killeffect" then
+        return type(getgenv().KillEffects) == "table"
+    elseif name == "tracer" then
+        return type(getgenv().Tracers) == "table"
+    end
+    return false
+end
+
+local function loadRemote(name)
+    if getgenv()._TapologyUseLocalModules and moduleAlreadyLoaded(name) then
+        getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
+        getgenv()._TapologyModuleSource[name] = "local"
         return
+    end
+    local src
+    local localPath = `{ModuleRoot}/{name}.lua`
+    if type(readfile) == "function" then
+        local okLocal, data = pcall(readfile, localPath)
+        if okLocal and type(data) == "string" and #data > 20 then
+            src = data
+            getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
+            getgenv()._TapologyModuleSource[name] = "local"
+        end
+    end
+    if not src then
+        local url = ModuleUrls[name]
+        if type(url) ~= "string" or url:find("YOUR_HOST", 1, true) then
+            warn("[Tapology]", name, "url is not set")
+            return
+        end
+        local ok, data = pcall(function()
+            return game:HttpGet(url)
+        end)
+        if not ok or type(data) ~= "string" or #data < 20 then
+            warn("[Tapology]", name, "download failed:", data)
+            return
+        end
+        src = data
+        getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
+        getgenv()._TapologyModuleSource[name] = "remote"
+        if name == "library" then
+            src = patchLibrary(src)
+        end
     end
     local fn, err = loadstring(src, "@" .. name)
     if not fn then
@@ -78,7 +227,22 @@ local Config = {
     HealthTransparency = 0,
     HealthLowColor = Color3.fromRGB(255, 70, 70),
     TextOutlineColor = Color3.fromRGB(0, 0, 0),
+    TextOutline = true,
     TextSize = 12,
+    BoxOutline = true,
+    HealthOutline = true,
+    Snaplines = false,
+    SnaplineColor = Color3.fromRGB(255, 255, 255),
+    SnaplineTransparency = 0,
+    SnaplineOutline = true,
+    OOV = false,
+    OOVRadius = 180,
+    OOVSize = 16,
+    OOVColor = Color3.fromRGB(255, 255, 255),
+    ChamsMode = "highlight",
+    AdornmentType = "solid",
+    AdornmentGlow = 1,
+    HighlightPerPart = false,
     Highlight = false,
     HighlightVisible = true,
     HighlightOccluded = true,
@@ -461,7 +625,15 @@ local function screenRect(camera, rootCFrame, low, high)
     return math.floor(left + 0.5), math.floor(top + 0.5), math.floor(right + 0.5), math.floor(bottom + 0.5)
 end
 
-local function placeText(text, value, shown, width, y, color, transparency)
+local function textOutlined(slot)
+    local value = Config[slot .. "Outline"]
+    if value == nil then
+        return Config.TextOutline ~= false
+    end
+    return value and true or false
+end
+
+local function placeText(text, value, shown, width, y, color, transparency, slot)
     local label = text.Label
     shown = shown and value ~= nil
     label.Visible = shown
@@ -471,7 +643,10 @@ local function placeText(text, value, shown, width, y, color, transparency)
     label.Size = UDim2.fromOffset(0, Config.TextSize)
     label.Position = UDim2.fromOffset(math.floor((width - label.TextBounds.X) / 2 + 0.5), y)
     label.TextColor3, label.TextTransparency = color, transparency
-    text.Stroke.Color, text.Stroke.Transparency = Config.TextOutlineColor, transparency
+    local outline = textOutlined(slot)
+    text.Stroke.Enabled = outline
+    text.Stroke.Color = Config.TextOutlineColor
+    text.Stroke.Transparency = outline and transparency or 1
     return Config.TextSize
 end
 
@@ -482,11 +657,104 @@ local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
 
+local Adornments = {}
+local PartHighlights = {}
+
 local function removeHighlight(key)
     local highlight = Highlights[key]
     if highlight then
         Highlights[key] = nil
         highlight:Destroy()
+    end
+    local parts = PartHighlights[key]
+    if parts then
+        PartHighlights[key] = nil
+        for _, inst in parts do
+            inst:Destroy()
+        end
+    end
+    local adorns = Adornments[key]
+    if adorns then
+        Adornments[key] = nil
+        for _, inst in adorns do
+            inst:Destroy()
+        end
+    end
+end
+
+local function adornLook(kind, glow)
+    local always = kind == "xray" or kind == "xray shaded" or kind == "plasma" or kind == "glow" or kind == "glow 2x"
+    local transparency = 0.2
+    if kind == "shaded" or kind == "xray shaded" then
+        transparency = 0.62
+    elseif kind == "glow" then
+        transparency = 0.4
+    elseif kind == "glow 2x" then
+        transparency = 0.28
+    elseif kind == "plasma" then
+        transparency = 0.42 + math.sin(os.clock() * 6) * 0.18
+    elseif kind == "solid" then
+        transparency = 0.12
+    end
+    local factor = math.clamp(tonumber(glow) or 1, 0.25, 4)
+    if kind == "glow" or kind == "glow 2x" or kind == "plasma" then
+        transparency = math.clamp(transparency / factor, 0, 0.9)
+    end
+    return always, transparency
+end
+
+local function applyAdornments(target, visible)
+    local key = target.Key
+    local list = Adornments[key]
+    if not list then
+        list = {}
+        Adornments[key] = list
+    end
+    local mode = visible and "HighlightVisible" or "HighlightOccluded"
+    local color = Config[mode .. "FillColor"]
+    local always, transparency = adornLook(Config.AdornmentType, Config.AdornmentGlow)
+    local kind = Config.AdornmentType
+    local wanted = 0
+    for _, part in target.Parts or {} do
+        if part and part.Parent and part:IsA("BasePart") and wanted < 14 then
+            wanted += 1
+            local box = list[wanted]
+            if not box then
+                box = Instance.new("BoxHandleAdornment")
+                box.Name = key
+                box.Parent = HighlightParent
+                list[wanted] = box
+                if kind == "glow 2x" then
+                    local outer = Instance.new("BoxHandleAdornment")
+                    outer.Name = key .. " glow"
+                    outer.Parent = HighlightParent
+                    list[wanted + 100] = outer
+                end
+            end
+            box.Adornee = part
+            box.Size = part.Size
+            box.AlwaysOnTop = always
+            box.ZIndex = 2
+            box.Color3 = color
+            box.Transparency = transparency
+            box.Visible = true
+            local outer = list[wanted + 100]
+            if outer then
+                outer.Adornee = part
+                outer.Size = part.Size * 1.08
+                outer.AlwaysOnTop = true
+                outer.ZIndex = 1
+                outer.Color3 = color
+                outer.Transparency = math.clamp(transparency + 0.25, 0, 0.92)
+                outer.Visible = kind == "glow 2x"
+            end
+        end
+    end
+    for index, inst in list do
+        local slot = index > 100 and index - 100 or index
+        if slot > wanted and inst then
+            inst.Visible = false
+        end
     end
 end
 
@@ -514,6 +782,39 @@ local function updateHighlight(target, rank, cameraPosition)
     local key = target.Key
     local wanted = Config.Highlight and rank <= MaxHighlights and (Config.HighlightVisible or Config.HighlightOccluded)
         and target.Model and target.Model.Parent
+    if wanted and Config.ChamsMode == "adornment" then
+        local highlight = Highlights[key]
+        if highlight then
+            Highlights[key] = nil
+            highlight:Destroy()
+        end
+        local visible = inSight(cameraPosition, target)
+        local parts = PartHighlights[key]
+        if parts then
+            PartHighlights[key] = nil
+            for _, inst in parts do
+                inst:Destroy()
+            end
+        end
+        if (visible and Config.HighlightVisible) or (not visible and Config.HighlightOccluded) then
+            applyAdornments(target, visible)
+        else
+            local adorns = Adornments[key]
+            if adorns then
+                for _, inst in adorns do
+                    inst.Visible = false
+                end
+            end
+        end
+        return
+    end
+    local adorns = Adornments[key]
+    if adorns then
+        Adornments[key] = nil
+        for _, inst in adorns do
+            inst:Destroy()
+        end
+    end
     local mode, depth
     if wanted then
         local visible = inSight(cameraPosition, target)
@@ -545,6 +846,144 @@ local function updateHighlight(target, rank, cameraPosition)
     highlight.DepthMode = depth
     highlight.FillColor, highlight.FillTransparency = Config[mode .. "FillColor"], Config[mode .. "FillTransparency"]
     highlight.OutlineColor, highlight.OutlineTransparency = Config[mode .. "OutlineColor"], Config[mode .. "OutlineTransparency"]
+    local oldParts = PartHighlights[key]
+    if Config.HighlightPerPart then
+        local made = oldParts or {}
+        PartHighlights[key] = made
+        local count = 0
+        for _, part in target.Parts or {} do
+            if part and part.Parent and part:IsA("BasePart") and count < 8 then
+                count += 1
+                local piece = made[count]
+                if not piece then
+                    piece = Instance.new("Highlight")
+                    piece.Name = key
+                    piece.Parent = HighlightParent
+                    made[count] = piece
+                end
+                piece.Adornee = part
+                piece.DepthMode = depth
+                piece.FillColor, piece.FillTransparency = highlight.FillColor, highlight.FillTransparency
+                piece.OutlineColor, piece.OutlineTransparency = highlight.OutlineColor, highlight.OutlineTransparency
+            end
+        end
+        for index = count + 1, #made do
+            made[index]:Destroy()
+            made[index] = nil
+        end
+    elseif oldParts then
+        PartHighlights[key] = nil
+        for _, inst in oldParts do
+            inst:Destroy()
+        end
+    end
+end
+
+local Snaplines = {}
+local Arrows = {}
+
+local function snapline(key)
+    local line = Snaplines[key]
+    if line then
+        return line
+    end
+    local frame = Instance.new("Frame")
+    frame.Name = "snap"
+    frame.AnchorPoint = Vector2.new(0.5, 0.5)
+    frame.BorderSizePixel = 0
+    frame.Visible = false
+    frame.ZIndex = 4
+    frame.Parent = Gui
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = frame
+    line = { Frame = frame, Stroke = stroke }
+    Snaplines[key] = line
+    return line
+end
+
+local function arrowFor(key)
+    local arrow = Arrows[key]
+    if arrow then
+        return arrow
+    end
+    local holder = Instance.new("Frame")
+    holder.Name = "oov"
+    holder.AnchorPoint = Vector2.new(0.5, 0.5)
+    holder.BackgroundTransparency = 1
+    holder.Size = UDim2.fromOffset(18, 18)
+    holder.Visible = false
+    holder.ZIndex = 5
+    holder.Parent = Gui
+    local function bar(rot, x)
+        local piece = Instance.new("Frame")
+        piece.AnchorPoint = Vector2.new(0.5, 0.5)
+        piece.Position = UDim2.new(0.5, x, 0.5, 0)
+        piece.Size = UDim2.fromOffset(3, 11)
+        piece.Rotation = rot
+        piece.BorderSizePixel = 0
+        piece.Parent = holder
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(1, 0)
+        corner.Parent = piece
+        return piece
+    end
+    arrow = { Holder = holder, A = bar(36, -3), B = bar(-36, 3) }
+    Arrows[key] = arrow
+    return arrow
+end
+
+local function placeSnap(key, from, to)
+    local line = snapline(key)
+    if not Config.Snaplines then
+        line.Frame.Visible = false
+        return
+    end
+    local delta = to - from
+    local length = delta.Magnitude
+    if length < 2 then
+        line.Frame.Visible = false
+        return
+    end
+    local mid = (from + to) * 0.5
+    line.Frame.Visible = true
+    line.Frame.Position = UDim2.fromOffset(mid.X, mid.Y)
+    line.Frame.Size = UDim2.fromOffset(length, 1)
+    line.Frame.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+    line.Frame.BackgroundColor3 = Config.SnaplineColor
+    line.Frame.BackgroundTransparency = Config.SnaplineTransparency
+    line.Stroke.Enabled = Config.SnaplineOutline ~= false
+    line.Stroke.Color = Color3.new(0, 0, 0)
+    line.Stroke.Transparency = Config.SnaplineTransparency
+end
+
+local function placeArrow(key, camera, world, onScreen)
+    local arrow = arrowFor(key)
+    if not Config.OOV or onScreen then
+        arrow.Holder.Visible = false
+        return
+    end
+    local screen = camera:WorldToViewportPoint(world)
+    local center = camera.ViewportSize * 0.5
+    local dir = Vector2.new(screen.X - center.X, screen.Y - center.Y)
+    if screen.Z <= 0 then
+        dir = -dir
+    end
+    if dir.Magnitude < 1 then
+        dir = Vector2.new(0, -1)
+    else
+        dir = dir.Unit
+    end
+    local radius = math.clamp(tonumber(Config.OOVRadius) or 180, 40, 500)
+    local pos = center + dir * radius
+    local size = math.clamp(tonumber(Config.OOVSize) or 16, 8, 32)
+    arrow.Holder.Visible = true
+    arrow.Holder.Position = UDim2.fromOffset(pos.X, pos.Y)
+    arrow.Holder.Size = UDim2.fromOffset(size, size)
+    arrow.Holder.Rotation = math.deg(math.atan2(dir.Y, dir.X))
+    arrow.A.BackgroundColor3 = Config.OOVColor
+    arrow.B.BackgroundColor3 = Config.OOVColor
 end
 
 local targets = {}
@@ -553,6 +992,12 @@ local function update()
     local camera = workspace.CurrentCamera
     if not camera then return end
     local cameraPosition = camera.CFrame.Position
+    for _, line in Snaplines do
+        line.Frame.Visible = false
+    end
+    for _, arrow in Arrows do
+        arrow.Holder.Visible = false
+    end
 
     table.clear(targets)
     if PhantomForces then
@@ -594,16 +1039,19 @@ local function update()
             box.Holder.Visible = true
 
             local boxes = Config.ShowBoxes
-            box.Outline.Parent.Visible, box.Box.Parent.Visible, box.Inline.Parent.Visible = boxes, boxes, boxes
+            local outline = boxes and Config.BoxOutline ~= false
+            box.Outline.Parent.Visible = outline
+            box.Inline.Parent.Visible = outline
+            box.Box.Parent.Visible = boxes
             box.Box.Color, box.Box.Transparency = Config.BoxColor, Config.BoxTransparency
             box.Outline.Color, box.Outline.Transparency = Config.OutlineColor, Config.OutlineTransparency
             box.Inline.Color, box.Inline.Transparency = Config.InlineColor, Config.InlineTransparency
 
             local nameY = -4 - Config.TextSize
-            placeText(box.Name, target.Name, Config.ShowNames, width, nameY, Config.NameColor, Config.NameTransparency)
+            placeText(box.Name, target.Name, Config.ShowNames, width, nameY, Config.NameColor, Config.NameTransparency, "Name")
             local belowY = height + 4
-            belowY += placeText(box.Weapon, target.Weapon and target.Weapon:lower(), Config.ShowWeapon, width, belowY, Config.WeaponColor, Config.WeaponTransparency)
-            placeText(box.Distance, `{math.floor(distance + 0.5)}st`, Config.ShowDistance, width, belowY, Config.DistanceColor, Config.DistanceTransparency)
+            belowY += placeText(box.Weapon, target.Weapon and target.Weapon:lower(), Config.ShowWeapon, width, belowY, Config.WeaponColor, Config.WeaponTransparency, "Weapon")
+            placeText(box.Distance, `{math.floor(distance + 0.5)}st`, Config.ShowDistance, width, belowY, Config.DistanceColor, Config.DistanceTransparency, "Distance")
 
             local health = target.Health
             local showHealth = Config.ShowHealth and health ~= nil
@@ -614,11 +1062,22 @@ local function update()
                 box.HealthBack.Position = UDim2.fromOffset(-6, -2)
                 box.HealthBack.Size = UDim2.fromOffset(3, height + 4)
                 box.HealthBack.BackgroundColor3 = Config.OutlineColor
-                box.HealthBack.BackgroundTransparency = Config.HealthTransparency
+                box.HealthBack.BackgroundTransparency = Config.HealthOutline == false and 1 or Config.HealthTransparency
                 box.HealthFill.Position = UDim2.fromOffset(1, 1 + fillSpan - fill)
                 box.HealthFill.Size = UDim2.fromOffset(1, fill)
                 box.HealthFill.BackgroundColor3 = Config.HealthLowColor:Lerp(Config.HealthColor, health)
                 box.HealthFill.BackgroundTransparency = Config.HealthTransparency
+            end
+            local viewport = camera.ViewportSize
+            placeSnap(target.Key, Vector2.new(viewport.X * 0.5, viewport.Y), Vector2.new((left + right) * 0.5, bottom))
+            placeArrow(target.Key, camera, target.Root.Position, true)
+        else
+            local line = Snaplines[target.Key]
+            if line then
+                line.Frame.Visible = false
+            end
+            if target.Root then
+                placeArrow(target.Key, camera, target.Root.Position, false)
             end
         end
     end
@@ -629,6 +1088,16 @@ local function update()
             if not Players:FindFirstChild(key) then
                 removeBox(key)
                 lastWeapon[key] = nil
+                local line = Snaplines[key]
+                if line then
+                    Snaplines[key] = nil
+                    line.Frame:Destroy()
+                end
+                local arrow = Arrows[key]
+                if arrow then
+                    Arrows[key] = nil
+                    arrow.Holder:Destroy()
+                end
             end
         end
     end
@@ -716,15 +1185,71 @@ local Config = {
     TargetPart = "head",
     VisibleCheck = false,
     MaxDistance = 1000,
+    MouseEnabled = false,
+    SilentEnabled = false,
+    Class = "assault",
 }
 
 local function syncMode()
-    local mode = Config.Mode == "silent" and "silent" or "mouse"
-    Config.Mode = mode
-    Config.Mouse = Config.Enabled and mode == "mouse"
-    Config.Silent = Config.Enabled and mode == "silent"
+    Config.Mouse = Config.MouseEnabled and true or false
+    Config.Silent = Config.SilentEnabled and true or false
+    Config.Enabled = Config.Mouse or Config.Silent
+    if Config.Silent and not Config.Mouse then
+        Config.Mode = "silent"
+    elseif Config.Mouse then
+        Config.Mode = "mouse"
+    end
 end
 syncMode()
+
+local WeaponClasses = { "assault", "pdw", "lmg", "sniper", "shotgun", "pistol" }
+local function profileFrom(source)
+    return {
+        MouseEnabled = source.MouseEnabled and true or false,
+        SilentEnabled = source.SilentEnabled and true or false,
+        MouseFOV = source.MouseFOV,
+        MouseShowFOV = source.MouseShowFOV,
+        MouseFOVOrigin = source.MouseFOVOrigin,
+        SilentFOV = source.SilentFOV,
+        SilentShowFOV = source.SilentShowFOV,
+        SilentFOVOrigin = source.SilentFOVOrigin,
+        Smoothness = source.Smoothness,
+        MouseKey = source.MouseKey,
+        HitChance = source.HitChance,
+        TargetPart = source.TargetPart,
+        VisibleCheck = source.VisibleCheck,
+        MaxDistance = source.MaxDistance,
+    }
+end
+Config.Profiles = {}
+for _, name in WeaponClasses do
+    Config.Profiles[name] = profileFrom(Config)
+end
+
+local function applyHeldProfile()
+    local held = (getgenv and getgenv().TapologyWeaponClass) or Config.Class or "assault"
+    if Config.Profiles[held] == nil then
+        held = "assault"
+    end
+    local profile = Config.Profiles[held]
+    if not profile then
+        return
+    end
+    Config.MouseEnabled = profile.MouseEnabled
+    Config.SilentEnabled = profile.SilentEnabled
+    Config.MouseFOV = profile.MouseFOV
+    Config.MouseShowFOV = profile.MouseShowFOV
+    Config.MouseFOVOrigin = profile.MouseFOVOrigin
+    Config.SilentFOV = profile.SilentFOV
+    Config.SilentShowFOV = profile.SilentShowFOV
+    Config.SilentFOVOrigin = profile.SilentFOVOrigin
+    Config.Smoothness = profile.Smoothness
+    Config.MouseKey = profile.MouseKey
+    Config.HitChance = profile.HitChance
+    Config.TargetPart = profile.TargetPart
+    Config.VisibleCheck = profile.VisibleCheck
+    Config.MaxDistance = profile.MaxDistance
+end
 
 local env = getgenv and getgenv() or _G
 if env.Aim then
@@ -1292,6 +1817,7 @@ end
 local wasSilent = Config.Silent
 local lastCacheAt = 0
 table.insert(Connections, RunService.RenderStepped:Connect(function(dt)
+    applyHeldProfile()
     syncMode()
     if Config.Silent ~= wasSilent then
         wasSilent = Config.Silent
@@ -1342,13 +1868,20 @@ end))
 
 env.Aim = {
     Config = Config,
+    Classes = WeaponClasses,
     SilentAvailable = Modules ~= nil and Modules.NetworkClient ~= nil,
     LastSilent = function()
         return LastSilent
     end,
     Rehook = installSilentHooks,
     SetEnabled = function(on)
-        Config.Enabled = on and true or false
+        local enabled = on and true or false
+        Config.Enabled = enabled
+        if Config.Mode == "silent" then
+            Config.SilentEnabled = enabled
+        else
+            Config.MouseEnabled = enabled
+        end
         syncMode()
         syncSilentHooks()
     end,
@@ -1425,6 +1958,15 @@ local Config = {
     DynamicExposureMin = -0.4,
     DynamicExposureMax = 0.8,
     DynamicExposureSpeed = 2,
+
+    Sun = false,
+    SunBrightness = 2,
+    SunSize = 21,
+    RemoveSun = false,
+    RemoveMoon = false,
+    RemoveStars = false,
+    WorldTexture = false,
+    WorldMaterial = "SmoothPlastic",
 
     Skybox = false,
     SkyboxId = "Pink Daylight",
@@ -1776,6 +2318,28 @@ local function copyColor(color, fallback)
     return fallback
 end
 
+local function applyCelestial()
+    local sky = Lighting:FindFirstChildOfClass("Sky")
+    if not sky then
+        return
+    end
+    if Original.SunAngularSize == nil then
+        Original.SunAngularSize = sky.SunAngularSize
+        Original.MoonAngularSize = sky.MoonAngularSize
+        Original.StarCount = sky.StarCount
+    end
+    if Config.RemoveSun then
+        sky.SunAngularSize = 0
+    elseif Config.Sun then
+        sky.SunAngularSize = math.clamp(tonumber(Config.SunSize) or 21, 0, 90)
+        Lighting.Brightness = tonumber(Config.SunBrightness) or Lighting.Brightness
+    else
+        sky.SunAngularSize = Original.SunAngularSize
+    end
+    sky.MoonAngularSize = Config.RemoveMoon and 0 or Original.MoonAngularSize
+    sky.StarCount = Config.RemoveStars and 0 or Original.StarCount
+end
+
 local function forceApplyWorld()
     if yieldToWeather() then
         return
@@ -1812,6 +2376,7 @@ local function forceApplyWorld()
     if Config.Skybox then
         applySkybox()
     end
+    applyCelestial()
     scheduleWorldColors()
 end
 
@@ -1951,7 +2516,71 @@ table.insert(Connections, RunService.Heartbeat:Connect(function()
     end
 end))
 
-table.insert(Connections, RunService.RenderStepped:Connect(function(dt)
+local savedWorldMaterials = {}
+local worldQueue = {}
+local worldIndex = 1
+local worldListedAt = 0
+local function worldMaterialEnum()
+    local name = Config.WorldMaterial or "SmoothPlastic"
+    local ok, mat = pcall(function()
+        return Enum.Material[name]
+    end)
+    return ok and mat or Enum.Material.SmoothPlastic
+end
+table.insert(Connections, RunService.Heartbeat:Connect(function()
+    if Config.WorldTexture then
+        local now = os.clock()
+        if now - worldListedAt > 4 or worldIndex > #worldQueue then
+            worldQueue = {}
+            for _, rootName in { "Map", "Terrain", "Ignore" } do
+                local root = workspace:FindFirstChild(rootName)
+                if root then
+                    for _, inst in root:GetDescendants() do
+                        table.insert(worldQueue, inst)
+                    end
+                end
+            end
+            if #worldQueue == 0 then
+                for _, inst in workspace:GetChildren() do
+                    table.insert(worldQueue, inst)
+                end
+            end
+            worldIndex = 1
+            worldListedAt = now
+        end
+        local mat = worldMaterialEnum()
+        local changed = 0
+        while worldIndex <= #worldQueue and changed < 20 do
+            local inst = worldQueue[worldIndex]
+            worldIndex += 1
+            if typeof(inst) == "Instance" and inst:IsA("BasePart") and inst.Parent then
+                local model = inst:FindFirstAncestorOfClass("Model")
+                if not (model and model:FindFirstChildOfClass("Humanoid")) then
+                    if savedWorldMaterials[inst] == nil then
+                        savedWorldMaterials[inst] = inst.Material
+                    end
+                    inst.Material = mat
+                    changed += 1
+                end
+            end
+        end
+    elseif next(savedWorldMaterials) then
+        local restored = 0
+        for inst, mat in savedWorldMaterials do
+            savedWorldMaterials[inst] = nil
+            if typeof(inst) == "Instance" and inst.Parent and typeof(mat) == "EnumItem" then
+                inst.Material = mat
+            end
+            restored += 1
+            if restored >= 40 then
+                break
+            end
+        end
+    end
+end))
+
+local lastDynamicTick = 0
+table.insert(Connections, RunService.Heartbeat:Connect(function(dt)
     if weatherOwnsEnvironment() then
         return
     end
@@ -1966,8 +2595,14 @@ table.insert(Connections, RunService.RenderStepped:Connect(function(dt)
         end
         return
     end
+    local now = os.clock()
+    if now - lastDynamicTick < 1 / 30 then
+        return
+    end
+    local elapsed = now - lastDynamicTick
+    lastDynamicTick = now
     local target = dynamicTarget() + (Config.ColorCorrection and Config.Exposure or 0)
-    DynamicValue += (target - DynamicValue) * math.clamp(dt * Config.DynamicExposureSpeed, 0, 1)
+    DynamicValue += (target - DynamicValue) * math.clamp(elapsed * Config.DynamicExposureSpeed, 0, 1)
     Lighting.ExposureCompensation = DynamicValue
 end))
 
@@ -2117,6 +2752,17 @@ local Config = {
     AntiAim = false,
     PitchAmount = 0,
     YawAmount = 180,
+    PitchType = "static",
+    YawType = "static",
+    PitchWays = 7,
+    YawWays = 7,
+    AASpeed = 6,
+    FakePosition = false,
+    FakePositionDistance = 4,
+    FakePositionHeight = 0,
+    RageVisual = false,
+    ShowScanRange = false,
+    ScanRangeVisual = 80,
 
     FakeLag = false,
     FakeLagAmount = 1.2,
@@ -2984,6 +3630,26 @@ local function wrapYaw(y)
     return y - pi
 end
 
+local function aaWave(kind, amount, ways)
+    local speed = number(Config.AASpeed, 6, 0.5, 20)
+    local t = os.clock() * speed
+    if kind == "sine" then
+        return amount * math.sin(t)
+    elseif kind == "jitter" then
+        return (math.floor(t * 2) % 2 == 0 and 1 or -1) * amount
+    elseif kind == "ways" then
+        local count = math.clamp(math.floor(tonumber(ways) or 7), 2, 10)
+        local step = math.floor(t) % count
+        if count <= 1 then
+            return 0
+        end
+        return -amount + (2 * amount) * (step / (count - 1))
+    elseif kind == "180" then
+        return (math.floor(t) % 2 == 0 and 1 or -1) * amount
+    end
+    return amount
+end
+
 local function applyAAAngles(angles)
     if typeof(angles) ~= "Vector3" or not isFiniteVec3(angles) then
         return angles
@@ -2991,10 +3657,33 @@ local function applyAAAngles(angles)
     if not Config.AntiAim then
         return angles
     end
-    local x = math.rad(number(Config.PitchAmount, 0, -89, 89))
-    local y = wrapYaw(math.rad(number(Config.YawAmount, 180, -180, 180)))
-    x = math.clamp(x, -halfPi, halfPi)
+    local pitchKind = Config.PitchType or "static"
+    local yawKind = Config.YawType or "static"
+    local pitch = pitchKind == "static" and math.rad(number(Config.PitchAmount, 0, -89, 89))
+        or aaWave(pitchKind, math.rad(number(Config.PitchAmount, 0, -89, 89)), Config.PitchWays)
+    local yaw = yawKind == "static" and math.rad(number(Config.YawAmount, 180, -180, 180))
+        or aaWave(yawKind, math.rad(number(Config.YawAmount, 180, -180, 180)), Config.YawWays)
+    local x = math.clamp(angles.X + pitch, -halfPi, halfPi)
+    local y = wrapYaw(angles.Y + yaw)
     return Vector3.new(x, y, 0)
+end
+
+local function applyFakePosition(position)
+    if not Config.FakePosition or not isFiniteVec3(position) then
+        return position
+    end
+    local cam = workspace.CurrentCamera
+    local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude < 0.05 then
+        flat = Vector3.new(0, 0, -1)
+    else
+        flat = flat.Unit
+    end
+    local dist = number(Config.FakePositionDistance, 4, 0, 14)
+    local height = number(Config.FakePositionHeight, 0, -6, 6)
+    local shifted = position + flat * dist + Vector3.new(0, height, 0)
+    return isFiniteVec3(shifted) and shifted or position
 end
 
 local FAKE_LAG_HARD_CAP = 2.8
@@ -3259,7 +3948,10 @@ local function startModules()
                     lastOrigin = position
                 end
 
-                if Config.AntiAim or Config.FakeLag then
+                if Config.AntiAim or Config.FakeLag or Config.FakePosition then
+                    if Config.FakePosition and isFiniteVec3(position) then
+                        position = applyFakePosition(position)
+                    end
                     if Config.FakeLag and isFiniteVec3(position) then
                         position = applyFakeLag(position)
                     else
@@ -3365,6 +4057,9 @@ local function startModules()
                     continue
                 end
                 local aim = entryAimPos(entry)
+                if isFiniteVec3(aim) then
+                    getgenv().TapologyAimPoint = aim
+                end
                 if not isFiniteVec3(aim) or (aim - origin).Magnitude > number(Config.MaxDistance, 1500, 1, 10000) then
                     continue
                 end
@@ -3605,7 +4300,36 @@ local function animatedDots()
     return string.rep(".", phase)
 end
 
+local scanPart, scanAdorn
 table.insert(Connections, RunService.RenderStepped:Connect(function()
+    if Config.ShowScanRange then
+        local origin = fallbackOrigin()
+        if isFiniteVec3(origin) then
+            if not scanPart then
+                scanPart = Instance.new("Part")
+                scanPart.Name = "TapologyScan"
+                scanPart.Anchored = true
+                scanPart.CanCollide = false
+                scanPart.CanQuery = false
+                scanPart.CanTouch = false
+                scanPart.Transparency = 1
+                scanPart.Size = Vector3.new(0.2, 0.2, 0.2)
+                scanPart.Parent = workspace
+                scanAdorn = Instance.new("SphereHandleAdornment")
+                scanAdorn.Adornee = scanPart
+                scanAdorn.AlwaysOnTop = true
+                scanAdorn.ZIndex = 1
+                scanAdorn.Transparency = 0.86
+                scanAdorn.Color3 = Color3.fromRGB(108, 147, 255)
+                scanAdorn.Parent = scanPart
+            end
+            scanPart.CFrame = CFrame.new(origin)
+            scanAdorn.Radius = number(Config.ScanRangeVisual, 80, 5, 400)
+            scanAdorn.Visible = true
+        end
+    elseif scanAdorn then
+        scanAdorn.Visible = false
+    end
     if not Config.Indicators then
         if indicatorGui then
             destroyIndicators()
@@ -3808,6 +4532,42 @@ local Config = {
     NoFallDamage = false,
     BunnyHop = false,
     OnlyWhileJumping = true,
+    SlideBoost = false,
+    SlideBoostSpeed = 70,
+    NoStamina = false,
+    NoMoveCooldown = false,
+    HeightBypass = false,
+    HeightBypassTime = 1.5,
+    CircleJump = false,
+    ZigzagJump = false,
+    Pathfind = false,
+    MoveSmooth = 12,
+    Crosshair = false,
+    CrosshairMode = "onscreen",
+    CrosshairThickness = 2,
+    CrosshairGap = 4,
+    CrosshairLength = 8,
+    CrosshairBounce = 0,
+    CrosshairBounceSpeed = 6,
+    CrosshairSpin = 0,
+    CrosshairSpinSpeed = 90,
+    CrosshairColor1 = Color3.fromRGB(255, 255, 255),
+    CrosshairColor2 = Color3.fromRGB(255, 255, 255),
+    CrosshairColor3 = Color3.fromRGB(255, 255, 255),
+    CrosshairColor4 = Color3.fromRGB(255, 255, 255),
+    RecoilControl = false,
+    RecoilScale = 0.55,
+    Removals = false,
+    RemoveItems = {},
+    RemoveHud = {},
+    RemoveDecals = false,
+    RemoveArms = false,
+    RemoveAnimations = false,
+    RemoveTeam = false,
+    RemoveEnemy = false,
+    RemoveExplosions = false,
+    RemoveDroppedGuns = false,
+    CustomSound = "",
 
     ThirdPerson = false,
     ShowCharacter = false,
@@ -3834,14 +4594,17 @@ local Config = {
     ArmsChams = false,
     ArmsChamsColor = Color3.fromRGB(108, 147, 255),
     ArmsChamsMaterial = "ForceField",
+    ArmsChamsAlpha = 0,
 
     BodyChams = false,
     BodyChamsColor = Color3.fromRGB(255, 190, 150),
     BodyChamsMaterial = "ForceField",
+    BodyChamsAlpha = 0,
 
     WeaponChams = false,
     WeaponChamsColor = Color3.fromRGB(108, 147, 255),
     WeaponChamsMaterial = "ForceField",
+    WeaponChamsAlpha = 0,
 
     Auras = {},
     AuraColors = {
@@ -3874,6 +4637,52 @@ local env = getgenv and getgenv() or _G
 if env.Misc then
     env.Misc.Unload()
 end
+
+do
+    if type(Config.RemoveHud) == "string" then
+        local value = Config.RemoveHud
+        Config.RemoveHud = {}
+        if value == "all" or value == "chat" then
+            Config.RemoveHud.chat = true
+        end
+        if value == "all" or value == "killfeed" then
+            Config.RemoveHud.killfeed = true
+        end
+    elseif type(Config.RemoveHud) ~= "table" then
+        Config.RemoveHud = {}
+    end
+    if type(Config.RemoveItems) ~= "table" then
+        Config.RemoveItems = {}
+    end
+    if not next(Config.RemoveItems) then
+        if Config.RemoveDecals then Config.RemoveItems.decals = true end
+        if Config.RemoveArms then Config.RemoveItems.arms = true end
+        if Config.RemoveAnimations then Config.RemoveItems.animations = true end
+        if Config.RemoveTeam then Config.RemoveItems.team = true end
+        if Config.RemoveEnemy then Config.RemoveItems.enemy = true end
+        if Config.RemoveExplosions then Config.RemoveItems.explosions = true end
+        if Config.RemoveDroppedGuns then Config.RemoveItems.dropped = true end
+    end
+end
+
+local function removalOn(name)
+    return Config.Removals == true and type(Config.RemoveItems) == "table" and Config.RemoveItems[name] == true
+end
+
+local function hudOn(name)
+    return Config.Removals == true and type(Config.RemoveHud) == "table" and Config.RemoveHud[name] == true
+end
+
+local function syncRemovalFlags()
+    Config.RemoveDecals = removalOn("decals")
+    Config.RemoveArms = removalOn("arms")
+    Config.RemoveAnimations = removalOn("animations")
+    Config.RemoveTeam = removalOn("team")
+    Config.RemoveEnemy = removalOn("enemy")
+    Config.RemoveExplosions = removalOn("explosions")
+    Config.RemoveDroppedGuns = removalOn("dropped")
+end
+syncRemovalFlags()
 
 local LocalPlayer = Players.LocalPlayer
 local PhantomForces = game.PlaceId == 292439477 or game.PlaceId == 299659045
@@ -4014,7 +4823,7 @@ if Modules then
         cameraObject.getBaseFov = function(self, ...)
             local base = getBaseFov(self, ...)
             if Config.FOV then
-                return Config.FOVAmount
+                return math.clamp(tonumber(Config.FOVAmount) or 90, 40, 135)
             end
             return base
         end
@@ -4136,7 +4945,8 @@ if Modules then
             local dt = math.clamp(now - lastCamClock, 0, 0.1)
             lastCamClock = now
             if Config.CameraSmooth then
-                local rate = math.clamp(Config.CameraSmoothness, 1, 40)
+                local smooth = math.clamp(tonumber(Config.CameraSmoothness) or 14, 1, 40)
+                local rate = (42 - smooth) * 0.45
                 local alpha = 1 - math.exp(-rate * dt)
                 smoothOffset = smoothOffset:Lerp(target, alpha)
             else
@@ -4323,19 +5133,19 @@ if Modules then
         lastShowPos = lastShowPos or position
 
         local velocity = smoothShowVel
-        if showDelta >= (1 / 30) then
-            local raw = (position - lastShowPos) / showDelta
-            if raw.Magnitude < 1.6 then
-                raw = Vector3.zero
-            elseif raw.Magnitude > 48 then
-                raw = raw.Unit * 48
-            end
+        local raw = (position - lastShowPos) / math.max(showDelta, 1 / 240)
+        showDelta = 0
+        lastShowPos = position
+        if raw.Magnitude < 6 then
+            raw = Vector3.zero
+        else
             raw = Vector3.new(raw.X, 0, raw.Z)
-            smoothShowVel = smoothShowVel:Lerp(raw, 0.28)
-            velocity = smoothShowVel
-            showDelta = 0
-            lastShowPos = position
+            if raw.Magnitude > 40 then
+                raw = raw.Unit * 40
+            end
         end
+        smoothShowVel = smoothShowVel:Lerp(raw, 1 - math.exp(-math.max(ndt, 0.001) * 6))
+        velocity = smoothShowVel
 
         if not currentObj then
             startedShow = true
@@ -4360,6 +5170,16 @@ if Modules then
                 local ok, aa = pcall(rage.GetAntiAimAngles, angles)
                 if ok and typeof(aa) == "Vector3" then
                     angles = aa
+                end
+            end
+            local rc = rage and rage.Config
+            local aimPoint = getgenv().TapologyAimPoint
+            if rc and rc.RageVisual and typeof(aimPoint) == "Vector3" then
+                local flat = aimPoint - position
+                if Vector3.new(flat.X, 0, flat.Z).Magnitude > 1 then
+                    local yaw = math.atan2(-flat.X, -flat.Z)
+                    local pitch = math.asin(math.clamp(flat.Unit.Y, -1, 1))
+                    angles = Vector3.new(pitch, yaw, 0)
                 end
             end
         end
@@ -4404,6 +5224,36 @@ if Modules then
                 elseif setCharacterRender then
                     setCharacterRender(currentObj, true)
                 end
+                local shown = currentObj.getCharacterModel and currentObj:getCharacterModel() or currentObj._characterModel
+                if typeof(shown) == "Instance" then
+                    local quietAt = rawget(currentObj, "_tapologyQuietAt") or 0
+                    local quietNow = os.clock()
+                    if quietNow - quietAt >= 0.2 then
+                        rawset(currentObj, "_tapologyQuietAt", quietNow)
+                        for _, desc in shown:GetDescendants() do
+                            if desc:IsA("Sound") then
+                                desc.Volume = 0
+                                desc.Playing = false
+                                desc.RollOffMaxDistance = 0
+                            elseif not Config.BodyChams and (desc:IsA("Decal") or desc:IsA("Texture") or desc:IsA("SurfaceAppearance")) then
+                                if desc.Name ~= "TapologyField" and not desc:FindFirstAncestor("TapologyField") then
+                                    if desc:IsA("SurfaceAppearance") then
+                                        pcall(function()
+                                            desc.Parent = nil
+                                        end)
+                                    else
+                                        desc.Transparency = 1
+                                    end
+                                end
+                            elseif not Config.BodyChams and desc:IsA("BasePart") then
+                                if desc.Material == Enum.Material.ForceField or desc.Material == Enum.Material.Neon or desc.Material == Enum.Material.Glass then
+                                    desc.Material = Enum.Material.SmoothPlastic
+                                    desc.Reflectance = 0
+                                end
+                            end
+                        end
+                    end
+                end
             end
         end)
     end))
@@ -4414,21 +5264,37 @@ if Modules then
     end)
 
     local savedMainOffset = {}
-    bindStep("TapologyMiscCamera", Enum.RenderPriority.Camera.Value + 1, function()
+    local fovHooked = setmetatable({}, { __mode = "k" })
+    bindStep("TapologyMiscCamera", Enum.RenderPriority.Last.Value, function()
         local cam = camera()
         if not cam then
             return
         end
 
+        local activeCam = cameraInterface and cameraInterface.getActiveCamera and cameraInterface.getActiveCamera()
         if Config.FOV then
-            cam.FieldOfView = Config.FOVAmount
+            local amount = math.clamp(tonumber(Config.FOVAmount) or 90, 40, 135)
+            cam.FieldOfView = amount
+            if type(activeCam) == "table" then
+                activeCam._baseFov = amount
+                if type(activeCam.getBaseFov) == "function" and not fovHooked[activeCam] then
+                    fovHooked[activeCam] = true
+                    local nextBase = activeCam.getBaseFov
+                    activeCam.getBaseFov = function(self, ...)
+                        if Config.FOV then
+                            return math.clamp(tonumber(Config.FOVAmount) or 90, 40, 135)
+                        end
+                        return nextBase(self, ...)
+                    end
+                end
+            end
         end
 
         if Config.AspectRatio then
             local size = cam.ViewportSize
             local native = size.X / math.max(size.Y, 1)
-            local wanted = math.clamp(Config.Aspect, 0.5, 3)
-            local factor = math.clamp(wanted / math.max(native, 1e-3), 0.35, 2.75)
+            local wanted = math.clamp(tonumber(Config.Aspect) or native, 0.4, 3)
+            local factor = math.clamp(wanted / math.max(native, 1e-3), 0.25, 3)
             local cf = cam.CFrame
             cam.CFrame = CFrame.fromMatrix(cf.Position, cf.XVector * factor, cf.YVector, cf.ZVector)
         end
@@ -4442,20 +5308,25 @@ if Modules then
                 end
                 local base = savedMainOffset[weapon]
                 if Config.Viewmodel then
-                    weapon._mainOffset = base * CFrame.new(Config.ViewmodelX, Config.ViewmodelY, Config.ViewmodelZ)
+                    local scale = 2
+                    weapon._mainOffset = base * CFrame.new(Config.ViewmodelX * scale, Config.ViewmodelY * scale, Config.ViewmodelZ * scale)
                 else
                     weapon._mainOffset = base
                 end
             end
-            if Config.Viewmodel then
-                local model = weapon._weaponModel
-                if typeof(model) == "Instance" then
-                    local root = model:IsA("Model") and (model.PrimaryPart or model:FindFirstChild("Handle") or model:FindFirstChildWhichIsA("BasePart"))
-                        or model:IsA("BasePart") and model
-                    if root then
-                        root.CFrame = root.CFrame * CFrame.new(Config.ViewmodelX, Config.ViewmodelY, Config.ViewmodelZ)
+            if Config.RecoilControl then
+                local scale = 1 - math.clamp(tonumber(Config.RecoilScale) or 0.5, 0, 1)
+                pcall(function()
+                    local spring = weapon._recoilSpring or weapon._cameraSpring
+                    if type(spring) == "table" then
+                        if typeof(spring.p) == "Vector3" then
+                            spring.p = spring.p * scale
+                        end
+                        if typeof(spring.v) == "Vector3" then
+                            spring.v = spring.v * scale
+                        end
                     end
-                end
+                end)
             end
         end
     end)
@@ -4711,6 +5582,51 @@ if Modules then
         end)
     end
 
+    local FIELD_TEXTURE = "rbxassetid://1084969997"
+    local function paintCham(part, alpha, materialName)
+        local amount = math.clamp(tonumber(alpha) or 0, 0, 0.92)
+        if materialName == "ForceField" then
+            part.Transparency = math.max(amount, 0.12)
+            local folder = part:FindFirstChild("TapologyField")
+            if not folder then
+                folder = Instance.new("Folder")
+                folder.Name = "TapologyField"
+                folder.Parent = part
+                local faces = {
+                    Enum.NormalId.Front,
+                    Enum.NormalId.Back,
+                    Enum.NormalId.Left,
+                    Enum.NormalId.Right,
+                    Enum.NormalId.Top,
+                    Enum.NormalId.Bottom,
+                }
+                for _, face in faces do
+                    local tex = Instance.new("Texture")
+                    tex.Name = face.Name
+                    tex.Face = face
+                    tex.Texture = FIELD_TEXTURE
+                    tex.StudsPerTileU = 2
+                    tex.StudsPerTileV = 2
+                    tex.Transparency = 0.2
+                    tex.Parent = folder
+                end
+            end
+            local shift = (os.clock() * 3) % 4
+            for _, tex in folder:GetChildren() do
+                if tex:IsA("Texture") then
+                    tex.OffsetStudsU = shift
+                    tex.OffsetStudsV = shift * 0.5
+                end
+            end
+        else
+            part.Transparency = amount
+            local folder = part:FindFirstChild("TapologyField")
+            if folder then
+                folder:Destroy()
+            end
+        end
+    end
+
     local function applyModelChams(model, color, materialName, opts)
         if typeof(model) ~= "Instance" then
             return
@@ -4746,7 +5662,7 @@ if Modules then
                 detachGear(desc)
             elseif stripSurfaceOnly and desc:IsA("SurfaceAppearance") then
                 hideOverlay(desc)
-            elseif stripOverlays and (desc:IsA("Decal") or desc:IsA("Texture") or desc:IsA("SurfaceAppearance")) then
+            elseif stripOverlays and (desc:IsA("Decal") or desc:IsA("Texture") or desc:IsA("SurfaceAppearance")) and desc.Name ~= "TapologyField" and not desc:FindFirstAncestor("TapologyField") then
                 hideOverlay(desc)
             elseif desc:IsA("BasePart") then
                 if skipRoot and (desc.Name == "HumanoidRootPart" or desc.Name == "Root") then
@@ -4769,7 +5685,7 @@ if Modules then
                         if reveal or forceVisible or stripGear then
                             local wasHidden = saved and typeof(saved.Transparency) == "number" and saved.Transparency >= 0.99
                             if stripGear or reveal or forceVisible or not wasHidden then
-                                desc.Transparency = ff and 0.58 or 0
+                                paintCham(desc, opts.alpha, materialName)
                                 desc.LocalTransparencyModifier = 0
                             end
                         end
@@ -4804,7 +5720,7 @@ if Modules then
                     if reveal or forceVisible or stripGear then
                         local wasHidden = saved and typeof(saved.Transparency) == "number" and saved.Transparency >= 0.99
                         if stripGear or reveal or forceVisible or not wasHidden then
-                            model.Transparency = 0
+                            paintCham(model, opts.alpha, materialName)
                             model.LocalTransparencyModifier = 0
                         end
                     end
@@ -4900,15 +5816,16 @@ if Modules then
 
         for _, desc in model:GetDescendants() do
             if desc:IsA("Decal") or desc:IsA("Texture") or desc:IsA("SurfaceAppearance") then
-                hideOverlay(desc)
+                if not desc:FindFirstAncestor("TapologyField") then
+                    hideOverlay(desc)
+                end
             elseif desc:IsA("BasePart") then
                 if shouldStripArmPart(desc) then
                     hideOverlay(desc)
                 elseif isArmFleshPart(desc) then
                     cacheInstance(desc)
                     pcall(function()
-
-                        desc.Transparency = 0
+                        paintCham(desc, Config.ArmsChamsAlpha, materialName)
                         desc.LocalTransparencyModifier = 0
                         desc.Color = color
                         desc.Material = mat
@@ -4921,7 +5838,7 @@ if Modules then
         if model:IsA("BasePart") and isArmFleshPart(model) then
             cacheInstance(model)
             pcall(function()
-                model.Transparency = 0
+                paintCham(model, Config.ArmsChamsAlpha, materialName)
                 model.LocalTransparencyModifier = 0
                 model.Color = color
                 model.Material = mat
@@ -4934,7 +5851,13 @@ if Modules then
         return typeof(model) == "Instance" and typeof(part) == "Instance" and part:IsDescendantOf(model)
     end
 
+    local lastChamPass = 0
     bindStep("TapologyMiscWeaponChams", Enum.RenderPriority.Camera.Value + 51, function()
+        local now = os.clock()
+        if now - lastChamPass < 0.05 then
+            return
+        end
+        lastChamPass = now
         local armsOn = Config.ArmsChams and true or false
         local bodyOn = Config.BodyChams and true or false
         local weaponOn = Config.WeaponChams and true or false
@@ -5025,13 +5948,13 @@ if Modules then
                     stripSurfaceOnly = false,
                     stripOverlays = true,
                     stripGear = true,
+                    alpha = Config.BodyChamsAlpha,
                 })
 
                 local bodyColor = Config.BodyChamsColor or Color3.fromRGB(255, 190, 150)
                 local bodyMatName = Config.BodyChamsMaterial or "ForceField"
                 local bodyMat = MATERIAL_MAP[bodyMatName] or Enum.Material.ForceField
                 local isFF = bodyMat == Enum.Material.ForceField
-                local ffAlpha = isFF and 0.58 or 0
                 local function isWeaponDescendant(inst)
                     local p = inst
                     while p and p ~= model do
@@ -5058,7 +5981,7 @@ if Modules then
                             desc.Material = bodyMat
                             desc.Color = bodyColor
                             desc.Reflectance = isFF and 0.18 or 0
-                            desc.Transparency = ffAlpha
+                            paintCham(desc, Config.BodyChamsAlpha, bodyMatName)
                             desc.LocalTransparencyModifier = 0
                             desc.CastShadow = false
                             if desc:IsA("MeshPart") then
@@ -5077,7 +6000,7 @@ if Modules then
                             end
                         end)
                     elseif (desc:IsA("Decal") or desc:IsA("Texture") or desc:IsA("SurfaceAppearance")
-                        or desc:IsA("Highlight")) and not isWeaponDescendant(desc)
+                        or desc:IsA("Highlight")) and not isWeaponDescendant(desc) and not desc:FindFirstAncestor("TapologyField")
                     then
                         hideOverlay(desc)
                     end
@@ -5110,6 +6033,7 @@ if Modules then
                     onlyVisible = true,
                     skipRoot = false,
                     stripOverlays = false,
+                    alpha = Config.WeaponChamsAlpha,
                 })
             end
             local tpo = currentObj or (fakeRepObject and fakeRepObject._thirdPersonObject)
@@ -5121,6 +6045,7 @@ if Modules then
                         onlyVisible = true,
                         skipRoot = false,
                         stripOverlays = false,
+                        alpha = Config.WeaponChamsAlpha,
                     })
                 end
             end
@@ -5220,6 +6145,17 @@ if Modules then
         end
         lastShootSoundAt = now
         local id = Config.ShootSoundIds and Config.ShootSoundIds[Config.ShootSound]
+        local custom = Config.CustomSound
+        if type(custom) == "string" and custom ~= "" then
+            if getcustomasset and (string.find(string.lower(custom), ".mp3", 1, true) or string.find(string.lower(custom), ".wav", 1, true)) then
+                local okAsset, asset = pcall(getcustomasset, custom)
+                if okAsset and type(asset) == "string" and asset ~= "" then
+                    id = asset
+                end
+            elseif string.find(custom, "rbxassetid://", 1, true) or string.find(custom, "rbxasset://", 1, true) then
+                id = custom
+            end
+        end
         if type(id) ~= "string" or id == "" then
             id = "rbxassetid://4817809188"
         end
@@ -5337,35 +6273,404 @@ else
             end
         end
     end))
-    local smoothOffset = Vector3.new(Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ)
-    local lastCamClock = os.clock()
-    bindStep("TapologyMiscCamera", Enum.RenderPriority.Camera.Value + 1, function()
+    local smoothWish = Vector3.zero
+    local lastGroundSnap = 0
+    local circleCenter = nil
+    local circleAngle = 0
+    local hiddenDecals = {}
+    local decalQueue = {}
+    local decalIndex = 1
+    local decalListedAt = 0
+    local hiddenHud = {}
+    local hiddenEnemies = {}
+    local removalTick = 0
+    local function rootPartOf(object)
+        if not object then
+            return nil
+        end
+        local ok, part = pcall(function()
+            if object.getRealRootPart then
+                return object:getRealRootPart()
+            end
+            if object.getRootPart then
+                return object:getRootPart()
+            end
+            return object._rootPart
+        end)
+        if ok and typeof(part) == "Instance" and part:IsA("BasePart") then
+            return part
+        end
+        return nil
+    end
+    local function wishDirection(cam)
+        local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
+        local right = cam and cam.CFrame.RightVector or Vector3.new(1, 0, 0)
+        local wish = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+            wish += look
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+            wish -= look
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+            wish += right
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+            wish -= right
+        end
+        wish = Vector3.new(wish.X, 0, wish.Z)
+        if wish.Magnitude > 1e-3 then
+            return wish.Unit
+        end
+        return Vector3.zero
+    end
+    local function weaponClassName(weapon)
+        local data = weapon and (weapon._weaponData or weapon.weaponData or weapon._data)
+        local label = ""
+        if type(data) == "table" then
+            label = tostring(data.displayname or data.displayName or data.name or data.Name or data.type or "")
+        end
+        if label == "" and weapon and type(weapon._name) == "string" then
+            label = weapon._name
+        end
+        local upper = string.upper(label)
+        local groups = {
+            { "pistol", { "M9", "G17", "M1911", "DEAGLE", "DESERT", "MP412", "REX", "93R", "TEC", "FIVE", "MAKAROV", "M45", "ZIP", "SERBU", "SFG", "PISTOL" } },
+            { "shotgun", { "KS-23", "KS23", "REMINGTON 870", "DBV", "SAIGA", "STEVENS", "SPAS", "AA-12", "USAS", "SHOTGUN" } },
+            { "sniper", { "INTERVENTION", "REMINGTON 700", "AWS", "AWM", "TRG", "MOSIN", "SVD", "WA2000", "BFG", "HECATE", "SCOUT", "DRAGUNOV", "OBREZ", "SNIPER" } },
+            { "lmg", { "M60", "HBAR", "MG36", "COLT LMG", "L86", "HAMR", "RPK", "HK21", "MG3", "LMG" } },
+            { "pdw", { "MP5", "MP7", "MP10", "UMP", "P90", "VECTOR", "KRISS", "MAC10", "MP40", "PPSH", "TOMMY", "SR-3", "PDW", "SMG" } },
+        }
+        for _, group in groups do
+            for _, token in group[2] do
+                if string.find(upper, token, 1, true) then
+                    return group[1]
+                end
+            end
+        end
+        if upper ~= "" then
+            return "assault"
+        end
+        return nil
+    end
+    table.insert(Connections, RunService.Heartbeat:Connect(function(dt)
+        dt = math.clamp(dt or 0.016, 0, 0.05)
+        local object = charInterface and charInterface.getCharacterObject and charInterface.getCharacterObject()
+        local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
+        local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
+        local className = weaponClassName(weapon)
+        if className then
+            getgenv().TapologyWeaponClass = className
+        end
+        if Config.NoStamina and object then
+            pcall(function()
+                if object._maxStamina ~= nil and object._stamina ~= nil then
+                    object._stamina = object._maxStamina
+                elseif object._stamina ~= nil then
+                    object._stamina = 1
+                end
+                if object._sprintCooldown ~= nil then
+                    object._sprintCooldown = 0
+                end
+            end)
+        end
+        if Config.NoMoveCooldown and object then
+            pcall(function()
+                if object._moveCooldown ~= nil then
+                    object._moveCooldown = 0
+                end
+                if object._jumpCooldown ~= nil then
+                    object._jumpCooldown = 0
+                end
+                if object._nextJump ~= nil then
+                    object._nextJump = 0
+                end
+            end)
+        end
+        local root = rootPartOf(object)
         local cam = camera()
-        if not cam then
+        local moving = Config.WalkSpeed or Config.SlideBoost or Config.CircleJump or Config.ZigzagJump or Config.Pathfind
+        if moving and root then
+            pcall(function()
+                if object._speed ~= nil then
+                    object._speed = math.max(tonumber(object._speed) or 0, Config.WalkSpeed and Config.SetSpeed or 16)
+                end
+            end)
+            local wish = wishDirection(cam)
+            local speed = Config.WalkSpeed and (tonumber(Config.SetSpeed) or 50) or 16
+            if Config.SlideBoost and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+                speed += tonumber(Config.SlideBoostSpeed) or 70
+            end
+            if Config.CircleJump and UserInputService:IsKeyDown(Enum.KeyCode.Z) then
+                circleCenter = circleCenter or root.Position
+                circleAngle += dt * 4
+                local offset = Vector3.new(math.cos(circleAngle), 0, math.sin(circleAngle)) * 6
+                wish = (circleCenter + offset - root.Position)
+                wish = Vector3.new(wish.X, 0, wish.Z)
+                if wish.Magnitude > 1e-3 then
+                    wish = wish.Unit
+                end
+                speed = math.max(speed, 40)
+            else
+                circleCenter = nil
+            end
+            if Config.ZigzagJump and UserInputService:IsKeyDown(Enum.KeyCode.F) then
+                local side = math.sin(os.clock() * 8)
+                local right = cam and cam.CFrame.RightVector or Vector3.new(1, 0, 0)
+                local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
+                local flat = Vector3.new(look.X, 0, look.Z)
+                local forward = flat.Magnitude > 1e-3 and flat.Unit or Vector3.new(0, 0, -1)
+                if wish.Magnitude < 1e-3 then
+                    wish = forward
+                end
+                local mixed = wish + right * side
+                if mixed.Magnitude > 1e-3 then
+                    wish = mixed.Unit
+                end
+                speed = math.max(speed, 36)
+            end
+            if Config.Pathfind then
+                local point = getgenv().TapologyAimPoint
+                if typeof(point) == "Vector3" then
+                    local toward = Vector3.new(point.X - root.Position.X, 0, point.Z - root.Position.Z)
+                    if toward.Magnitude > 4 then
+                        wish = toward.Unit
+                        speed = math.max(speed, Config.WalkSpeed and Config.SetSpeed or 28)
+                    end
+                end
+            end
+            local rate = math.clamp(tonumber(Config.MoveSmooth) or 12, 1, 40)
+            smoothWish = smoothWish:Lerp(wish * speed, 1 - math.exp(-dt * rate))
+            if smoothWish.Magnitude > 0.05 then
+                root.CFrame = root.CFrame + smoothWish * dt
+            end
+        else
+            smoothWish = smoothWish:Lerp(Vector3.zero, 1 - math.exp(-dt * 8))
+        end
+        if Config.RemoveDecals then
+            local now = os.clock()
+            if now - decalListedAt > 3 or decalIndex > #decalQueue then
+                decalQueue = {}
+                local roots = {}
+                for _, rootName in { "Map", "Ignore" } do
+                    local folder = workspace:FindFirstChild(rootName)
+                    if folder then
+                        table.insert(roots, folder)
+                    end
+                end
+                if #roots == 0 then
+                    roots = { workspace }
+                end
+                for _, rootFolder in roots do
+                    for _, inst in rootFolder:GetDescendants() do
+                        if inst:IsA("Decal") or inst:IsA("Texture") then
+                            table.insert(decalQueue, inst)
+                        end
+                    end
+                end
+                decalIndex = 1
+                decalListedAt = now
+            end
+            local scanned = 0
+            while decalIndex <= #decalQueue and scanned < 25 do
+                local inst = decalQueue[decalIndex]
+                decalIndex += 1
+                if typeof(inst) == "Instance" and inst.Parent and hiddenDecals[inst] == nil and not inst:FindFirstAncestor("TapologyField") then
+                    hiddenDecals[inst] = inst.Transparency
+                    inst.Transparency = 1
+                    scanned += 1
+                end
+            end
+        elseif next(hiddenDecals) then
+            local restored = 0
+            for inst, transparency in hiddenDecals do
+                hiddenDecals[inst] = nil
+                if typeof(inst) == "Instance" and inst.Parent then
+                    inst.Transparency = transparency
+                end
+                restored += 1
+                if restored >= 40 then
+                    break
+                end
+            end
+        end
+        local nowTick = os.clock()
+        if Config.RemoveArms and object and nowTick - (rawget(object, "_tapologyArmHideAt") or 0) >= 0.15 then
+            rawset(object, "_tapologyArmHideAt", nowTick)
+            pcall(function()
+                local function hideArm(model)
+                    if typeof(model) ~= "Instance" then
+                        return
+                    end
+                    for _, desc in model:GetDescendants() do
+                        if desc:IsA("BasePart") or desc:IsA("Decal") or desc:IsA("Texture") then
+                            desc.LocalTransparencyModifier = 1
+                        end
+                    end
+                end
+                hideArm(object._leftArmModel)
+                hideArm(object._rightArmModel)
+            end)
+        end
+        if Config.RemoveAnimations and object and object._humanoid and nowTick - (rawget(object, "_tapologyAnimAt") or 0) >= 0.2 then
+            rawset(object, "_tapologyAnimAt", nowTick)
+            pcall(function()
+                for _, track in object._humanoid:GetPlayingAnimationTracks() do
+                    local name = string.lower(track.Name)
+                    if string.find(name, "reload", 1, true) or string.find(name, "equip", 1, true) or string.find(name, "inspect", 1, true) or string.find(name, "sprint", 1, true) then
+                        track:Stop(0)
+                    end
+                end
+            end)
+        end
+        if nowTick - removalTick > 0.3 and (Config.RemoveEnemy or Config.RemoveTeam or Config.RemoveExplosions or Config.RemoveDroppedGuns) then
+            removalTick = nowTick
+            local folder = workspace:FindFirstChild("Players")
+            if folder and (Config.RemoveEnemy or Config.RemoveTeam) then
+                for _, player in Players:GetPlayers() do
+                    if player ~= LocalPlayer then
+                        local same = LocalPlayer.TeamColor and player.TeamColor == LocalPlayer.TeamColor
+                        local hide = (Config.RemoveEnemy and not same) or (Config.RemoveTeam and same)
+                        local model = folder:FindFirstChild(player.Name)
+                        if hide and model then
+                            for _, desc in model:GetDescendants() do
+                                if desc:IsA("BasePart") and hiddenEnemies[desc] == nil then
+                                    hiddenEnemies[desc] = desc.LocalTransparencyModifier
+                                    desc.LocalTransparencyModifier = 1
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if Config.RemoveExplosions then
+                local ignoreFolder = workspace:FindFirstChild("Ignore")
+                if ignoreFolder then
+                    for _, desc in ignoreFolder:GetChildren() do
+                        local lower = string.lower(desc.Name)
+                        if string.find(lower, "explosion", 1, true) or string.find(lower, "blast", 1, true) then
+                            for _, effect in desc:GetDescendants() do
+                                if effect:IsA("ParticleEmitter") or effect:IsA("Fire") or effect:IsA("Smoke") then
+                                    effect.Enabled = false
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if Config.RemoveDroppedGuns then
+                local ignoreFolder = workspace:FindFirstChild("Ignore")
+                local dropped = ignoreFolder and ignoreFolder:FindFirstChild("Dropped")
+                if dropped then
+                    for _, desc in dropped:GetDescendants() do
+                        if desc:IsA("BasePart") then
+                            desc.LocalTransparencyModifier = 1
+                        end
+                    end
+                end
+            end
+        elseif not Config.RemoveEnemy and not Config.RemoveTeam and next(hiddenEnemies) then
+            for inst, modifier in hiddenEnemies do
+                hiddenEnemies[inst] = nil
+                if typeof(inst) == "Instance" and inst.Parent then
+                    inst.LocalTransparencyModifier = modifier
+                end
+            end
+        end
+        local playerGui = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local hideChat = hudOn("chat")
+        local hideKillfeed = hudOn("killfeed")
+        if playerGui and (hideChat or hideKillfeed) then
+            for _, child in playerGui:GetChildren() do
+                local lower = string.lower(child.Name)
+                local match = (hideChat and string.find(lower, "chat", 1, true))
+                    or (hideKillfeed and (string.find(lower, "kill", 1, true) or string.find(lower, "feed", 1, true)))
+                if match and child:IsA("ScreenGui") then
+                    if hiddenHud[child] == nil then
+                        hiddenHud[child] = child.Enabled
+                    end
+                    child.Enabled = false
+                end
+            end
+        elseif next(hiddenHud) then
+            for gui, enabled in hiddenHud do
+                hiddenHud[gui] = nil
+                if typeof(gui) == "Instance" and gui.Parent then
+                    gui.Enabled = enabled
+                end
+            end
+        end
+        if Config.HeightBypass and Config.JumpPower and root then
+            local now = os.clock()
+            local waitFor = math.clamp(tonumber(Config.HeightBypassTime) or 1.5, 0.2, 8)
+            if now - lastGroundSnap >= waitFor then
+                lastGroundSnap = now
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.FilterDescendantsInstances = { root, workspace.CurrentCamera }
+                local hit = workspace:Raycast(root.Position, Vector3.new(0, -500, 0), params)
+                if hit and (root.Position.Y - hit.Position.Y) > 18 then
+                    root.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3.5, 0)) * (root.CFrame - root.CFrame.Position)
+                end
+            end
+        end
+    end))
+
+    local crossGui = Instance.new("ScreenGui")
+    crossGui.Name = "TapologyCrosshair"
+    crossGui.IgnoreGuiInset = true
+    crossGui.ResetOnSpawn = false
+    crossGui.DisplayOrder = 20
+    crossGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+    local crossHolder = Instance.new("Frame")
+    crossHolder.AnchorPoint = Vector2.new(0.5, 0.5)
+    crossHolder.BackgroundTransparency = 1
+    crossHolder.Size = UDim2.fromOffset(80, 80)
+    crossHolder.Visible = false
+    crossHolder.Parent = crossGui
+    local crossBars = {}
+    for i = 1, 4 do
+        local bar = Instance.new("Frame")
+        bar.AnchorPoint = Vector2.new(0.5, 0.5)
+        bar.BorderSizePixel = 0
+        bar.Parent = crossHolder
+        crossBars[i] = bar
+    end
+    bindStep("TapologyCrosshair", Enum.RenderPriority.Camera.Value + 120, function()
+        local cam = camera()
+        crossHolder.Visible = Config.Crosshair and cam ~= nil
+        if not crossHolder.Visible or not cam then
             return
         end
-        if Config.FOV then
-            cam.FieldOfView = Config.FOVAmount
+        local center = cam.ViewportSize * 0.5
+        if Config.CrosshairMode == "ingame" then
+            local mouse = UserInputService:GetMouseLocation()
+            crossHolder.Position = UDim2.fromOffset(mouse.X, mouse.Y)
+        else
+            crossHolder.Position = UDim2.fromOffset(center.X, center.Y)
         end
-        if Config.AspectRatio then
-            local size = cam.ViewportSize
-            local native = size.X / math.max(size.Y, 1)
-            local factor = math.clamp(Config.Aspect / math.max(native, 1e-3), 0.35, 2.75)
-            local cf = cam.CFrame
-            cam.CFrame = CFrame.fromMatrix(cf.Position, cf.XVector * factor, cf.YVector, cf.ZVector)
+        local bounce = math.sin(os.clock() * (tonumber(Config.CrosshairBounceSpeed) or 6)) * (tonumber(Config.CrosshairBounce) or 0)
+        local gap = math.max(0, (tonumber(Config.CrosshairGap) or 4) + bounce)
+        local length = math.clamp(tonumber(Config.CrosshairLength) or 8, 1, 40)
+        local thick = math.clamp(tonumber(Config.CrosshairThickness) or 2, 1, 8)
+        crossHolder.Rotation = os.clock() * (tonumber(Config.CrosshairSpinSpeed) or 0) * (tonumber(Config.CrosshairSpin) or 0)
+        local colors = { Config.CrosshairColor1, Config.CrosshairColor2, Config.CrosshairColor3, Config.CrosshairColor4 }
+        local layout = {
+            { 40, 40 - gap - length / 2, thick, length },
+            { 40 + gap + length / 2, 40, length, thick },
+            { 40, 40 + gap + length / 2, thick, length },
+            { 40 - gap - length / 2, 40, length, thick },
+        }
+        for i = 1, 4 do
+            local bar = crossBars[i]
+            local spot = layout[i]
+            bar.Position = UDim2.fromOffset(spot[1], spot[2])
+            bar.Size = UDim2.fromOffset(spot[3], spot[4])
+            bar.BackgroundColor3 = colors[i] or Color3.new(1, 1, 1)
         end
-        if Config.ThirdPerson then
-            local target = Vector3.new(Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ)
-            local now = os.clock()
-            local dt = math.clamp(now - lastCamClock, 0, 0.1)
-            lastCamClock = now
-            if Config.CameraSmooth then
-                smoothOffset = smoothOffset:Lerp(target, 1 - math.exp(-math.clamp(Config.CameraSmoothness, 1, 40) * dt))
-            else
-                smoothOffset = target
-            end
-            cam.CFrame = cam.CFrame * CFrame.new(smoothOffset)
-        end
+    end)
+    table.insert(Restores, function()
+        crossGui:Destroy()
     end)
 end
 
@@ -7070,7 +8375,6 @@ local function cycleWingMode()
         startEffect(Current, EffectsByName.Wings)
     end
     saveSettings()
-    print(`[Aura] Wing mode: {Config.WingMode}`)
 end
 
 local function toggleAll()
@@ -7082,7 +8386,6 @@ local function toggleAll()
         setEffect(def.Name, not anyOn)
     end
     saveSettings()
-    print(`[Aura] All effects: {anyOn and "OFF" or "ON"}`)
 end
 
 local function bindKeys()
@@ -7103,7 +8406,6 @@ local function bindKeys()
             local name = keyToEffect[key]
             setEffect(name)
             saveSettings()
-            print(`[Aura] {name}: {Enabled[name] and "ON" or "OFF"}`)
         end
     end))
 end
@@ -7206,9 +8508,6 @@ local function main()
             buildCharacter(LocalPlayer.Character)
         end
     end)
-    if not okBuild then
-        warn("[Aura] initial build failed: ", buildErr)
-    end
     table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function(character)
         task.spawn(buildCharacter, character)
     end))
@@ -7217,7 +8516,19 @@ local function main()
             cleanup()
         end
     end))
-    table.insert(Connections, RunService.RenderStepped:Connect(update))
+    local lastAura = 0
+    table.insert(Connections, RunService.Heartbeat:Connect(function()
+        local now = os.clock()
+        if now - lastAura < 1 / 20 then
+            return
+        end
+        local dt = now - lastAura
+        lastAura = now
+        local okUpdate, updateErr = pcall(update, math.clamp(dt, 0.01, 0.1))
+        if not okUpdate then
+            warn("[Aura] update failed:", updateErr)
+        end
+    end))
 end
 
 TextureIds = {
@@ -7412,46 +8723,139 @@ local rageTab = ensureTab("rage")
 local players = ensureTab("players")
 local worldTab = ensureTab("world")
 local miscTab = ensureTab("misc")
+getgenv()._TapologyServerPage = ensureTab("server")
 
-local aimbot = legit:Groupbox("aimbot", "left")
-local helpers = legit:Groupbox("helpers", "right")
-
-local function aimFov(section, fovKey, showKey, colorSlot, originKey)
-    section:Slider("fov", { Min = 10, Max = 600, Default = Aim.Config[fovKey], Suffix = "px" }, function(value)
-        aim().Config[fovKey] = value
-    end)
-    local show = section:Toggle("show fov", Aim.Config[showKey], function(on)
-        aim().Config[showKey] = on
-    end)
-    show:AlphaColorPicker(Aim.Config[colorSlot .. "Color"], 1 - Aim.Config[colorSlot .. "Transparency"], function(color, alpha)
-        aim().SetColor(colorSlot, color, 1 - alpha)
-    end)
-    show:Children():Dropdown("origin", {
-        Values = { "crosshair", "screen" },
-        Default = Aim.Config[originKey] == "screen" and "screen" or "crosshair",
-    }, function(value)
-        aim().Config[originKey] = value
-    end)
+local function buildLegitUi()
+local editingClass = aim().Config.Class or "assault"
+local function touch(key, value)
+    local profiles = aim().Config.Profiles
+    local profile = profiles and profiles[editingClass]
+    if profile then
+        profile[key] = value
+    end
+    if editingClass == (getgenv().TapologyWeaponClass or editingClass) then
+        aim().Config[key] = value
+    end
 end
 
-local aimEnable = aimbot:Toggle("enable", Aim.Config.Enabled, function(on)
-    aim().SetEnabled(on)
+local aimbot = legit:Groupbox("aimbot", "left")
+local silentBox = legit:Groupbox("silent", "right")
+
+local mouseEnable = aimbot:Toggle("enable", Aim.Config.MouseEnabled, function(on)
+    touch("MouseEnabled", on)
 end)
-local aimKids = aimEnable:Children()
-local aimMode = aimKids:Dropdown("mode", {
-    Values = { "mouse", "silent" },
-    Default = Aim.Config.Mode == "silent" and "silent" or "mouse",
+mouseEnable:Keybind()
+local mouseKids = mouseEnable:Children()
+local mouseFov = mouseKids:Slider("fov", { Min = 10, Max = 600, Default = Aim.Config.MouseFOV, Suffix = "px" }, function(value)
+    touch("MouseFOV", value)
+end)
+local mouseShow = mouseKids:Toggle("show fov", Aim.Config.MouseShowFOV, function(on)
+    touch("MouseShowFOV", on)
+end)
+mouseShow:AlphaColorPicker(Aim.Config.MouseFOVColor, 1 - Aim.Config.MouseFOVTransparency, function(color, alpha)
+    aim().SetColor("MouseFOV", color, 1 - alpha)
+end)
+local mouseOrigin = mouseShow:Children():Dropdown("origin", {
+    Values = { "crosshair", "screen" },
+    Default = Aim.Config.MouseFOVOrigin == "screen" and "screen" or "crosshair",
 }, function(value)
-    aim().SetMode(value)
+    touch("MouseFOVOrigin", value)
 end)
-aimFov(aimMode:Children("mouse"), "MouseFOV", "MouseShowFOV", "MouseFOV", "MouseFOVOrigin")
-aimFov(aimMode:Children("silent"), "SilentFOV", "SilentShowFOV", "SilentFOV", "SilentFOVOrigin")
+local mouseSmooth = mouseKids:Slider("smoothness", { Min = 0, Max = 0.95, Default = Aim.Config.Smoothness, Decimals = 2 }, function(value)
+    touch("Smoothness", value)
+end)
+local mouseKey = mouseKids:Dropdown("mouse key", { Values = { "right mouse", "left mouse", "always" }, Default = Aim.Config.MouseKey }, function(value)
+    touch("MouseKey", value)
+end)
+local targetPart = mouseKids:Dropdown("target part", { Values = { "head", "torso" }, Default = Aim.Config.TargetPart }, function(value)
+    touch("TargetPart", value)
+end)
+local visibleCheck = mouseKids:Toggle("visible check", Aim.Config.VisibleCheck, function(on)
+    touch("VisibleCheck", on)
+end)
+local maxDistance = mouseKids:Slider("max distance", { Min = 50, Max = 2000, Default = Aim.Config.MaxDistance, Suffix = "st" }, function(value)
+    touch("MaxDistance", value)
+end)
+
+local silentEnable = silentBox:Toggle("enable", Aim.Config.SilentEnabled, function(on)
+    touch("SilentEnabled", on)
+end)
+silentEnable:Keybind()
+local silentKids = silentEnable:Children()
+local silentFov = silentKids:Slider("fov", { Min = 10, Max = 600, Default = Aim.Config.SilentFOV, Suffix = "px" }, function(value)
+    touch("SilentFOV", value)
+end)
+local silentShow = silentKids:Toggle("show fov", Aim.Config.SilentShowFOV, function(on)
+    touch("SilentShowFOV", on)
+end)
+silentShow:AlphaColorPicker(Aim.Config.SilentFOVColor, 1 - Aim.Config.SilentFOVTransparency, function(color, alpha)
+    aim().SetColor("SilentFOV", color, 1 - alpha)
+end)
+local silentOrigin = silentShow:Children():Dropdown("origin", {
+    Values = { "crosshair", "screen" },
+    Default = Aim.Config.SilentFOVOrigin == "screen" and "screen" or "crosshair",
+}, function(value)
+    touch("SilentFOVOrigin", value)
+end)
+local hitChance = silentKids:Slider("hit chance", { Min = 1, Max = 100, Default = Aim.Config.HitChance, Suffix = "%" }, function(value)
+    touch("HitChance", value)
+end)
 if not Aim.SilentAvailable then
     Library:Notify("silent aim needs a rejoin with the debug flag (esp turns it on)", 4)
 end
 
+local classColumns = legit.Frame and legit.Frame:FindFirstChild("Columns")
+if classColumns then
+    local oldBar = legit.Frame:FindFirstChild("ClassBar")
+    if oldBar then
+        oldBar:Destroy()
+    end
+    local inset = classColumns.Position.X.Offset
+    local barHeight = 40
+    local gap = 10
+    local bar = Instance.new("Frame")
+    bar.Name = "ClassBar"
+    bar.BackgroundTransparency = 1
+    bar.ClipsDescendants = false
+    bar.Position = UDim2.fromOffset(inset, inset)
+    bar.Size = UDim2.new(1, -(inset * 2), 0, barHeight)
+    bar.ZIndex = 5
+    bar.Parent = legit.Frame
+    local barLayout = Instance.new("UIListLayout")
+    barLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    barLayout.Parent = bar
+    classColumns.Position = UDim2.fromOffset(inset, inset + barHeight + gap)
+    UI.Dropdown(bar, "weapon class", {
+        Values = Aim.Classes or { "assault", "pdw", "lmg", "sniper", "shotgun", "pistol" },
+        Default = editingClass,
+    }, function(value)
+        editingClass = value
+        aim().Config.Class = value
+        local profile = aim().Config.Profiles and aim().Config.Profiles[value]
+        if not profile then
+            return
+        end
+        mouseEnable:Set(profile.MouseEnabled)
+        silentEnable:Set(profile.SilentEnabled)
+        mouseFov:Set(profile.MouseFOV)
+        silentFov:Set(profile.SilentFOV)
+        mouseShow:Set(profile.MouseShowFOV)
+        silentShow:Set(profile.SilentShowFOV)
+        mouseOrigin:Set(profile.MouseFOVOrigin)
+        silentOrigin:Set(profile.SilentFOVOrigin)
+        mouseSmooth:Set(profile.Smoothness)
+        mouseKey:Set(profile.MouseKey)
+        targetPart:Set(profile.TargetPart)
+        visibleCheck:Set(profile.VisibleCheck)
+        maxDistance:Set(profile.MaxDistance)
+        hitChance:Set(profile.HitChance)
+    end)
+end
+end
+buildLegitUi()
+
+local function buildRageUi()
 local rageBot = rageTab:Groupbox("ragebot", "left")
-local resolverBox = rageTab:Groupbox("resolver", "right")
 local antiAim = rageTab:Groupbox("anti aim", "left")
 local visualizing = rageTab:Groupbox("visualizing", "left")
 local fakeLag = rageTab:Groupbox("fake lag", "right")
@@ -7510,23 +8914,11 @@ end)
 rageKids:Toggle("prediction", Rage.Config.Prediction ~= false, function(on)
     rage().Config.Prediction = on
 end)
-if not Rage.Available then
-    Library:Notify("rage needs a rejoin with the debug flag (visuals turns it on)", 4)
-end
-
-resolverBox:Toggle("enable", Rage.Config.Resolver, function(on)
+local resolverToggle = rageKids:Toggle("resolver", Rage.Config.Resolver, function(on)
     rage().Config.Resolver = on
 end)
-resolverBox:Slider("cooldown", {
-    Min = 0.1,
-    Max = 5,
-    Default = Rage.Config.ResolverCooldown or 1,
-    Decimals = 1,
-    Suffix = "s",
-}, function(value)
-    rage().Config.ResolverCooldown = value
-end)
-resolverBox:Slider("strength", {
+local resolverKids = resolverToggle:Children()
+resolverKids:Slider("strength", {
     Min = 0.5,
     Max = 10,
     Default = Rage.Config.ResolverStrength or 4,
@@ -7535,30 +8927,74 @@ resolverBox:Slider("strength", {
 }, function(value)
     rage().Config.ResolverStrength = value
 end)
-resolverBox:Slider("height", {
-    Min = -2,
-    Max = 3,
-    Default = Rage.Config.ResolverHeight or 0.35,
-    Decimals = 2,
-    Suffix = "st",
-}, function(value)
-    rage().Config.ResolverHeight = value
-end)
-resolverBox:Slider("hold", {
-    Min = 0.05,
-    Max = 2,
-    Default = Rage.Config.ResolverHold or 0.45,
-    Decimals = 2,
+resolverKids:Slider("cooldown", {
+    Min = 0.1,
+    Max = 5,
+    Default = Rage.Config.ResolverCooldown or 1,
+    Decimals = 1,
     Suffix = "s",
 }, function(value)
-    rage().Config.ResolverHold = value
+    rage().Config.ResolverCooldown = value
 end)
+local perf = rageEnable:Settings("performance")
+perf:Slider("bullet checks", {
+    Min = 4,
+    Max = 80,
+    Default = Rage.Config.MaxBulletChecks or 40,
+    Decimals = 0,
+}, function(value)
+    rage().Config.MaxBulletChecks = value
+end)
+perf:Slider("frame checks", {
+    Min = 8,
+    Max = 256,
+    Default = Rage.Config.MaxFrameChecks or 128,
+    Decimals = 0,
+}, function(value)
+    rage().Config.MaxFrameChecks = value
+end)
+perf:Slider("scan budget", {
+    Min = 1,
+    Max = 8,
+    Default = Rage.Config.ScanBudgetMs or 5,
+    Decimals = 1,
+    Suffix = "ms",
+}, function(value)
+    rage().Config.ScanBudgetMs = value
+end)
+perf:Dropdown("scan type", {
+    Values = { "V1", "V2" },
+    Default = Rage.Config.HitPositionScanMode == "V2" and "V2" or "V1",
+}, function(value)
+    rage().Config.HitPositionScanMode = value == "V2" and "V2" or "V1"
+end)
+perf:Toggle("show scan range", Rage.Config.ShowScanRange, function(on)
+    rage().Config.ShowScanRange = on
+end)
+perf:Slider("scan range", {
+    Min = 5,
+    Max = 400,
+    Default = Rage.Config.ScanRangeVisual or 80,
+    Suffix = "st",
+}, function(value)
+    rage().Config.ScanRangeVisual = value
+end)
+if not Rage.Available then
+    Library:Notify("rage needs a rejoin with the debug flag (visuals turns it on)", 4)
+end
 
 local aaEnable = antiAim:Toggle("enable", Rage.Config.AntiAim, function(on)
     rage().Config.AntiAim = on
 end)
 aaEnable:Keybind()
 local aaKids = aaEnable:Children()
+local aaTypes = { "static", "sine", "jitter", "ways", "180" }
+aaKids:Dropdown("pitch type", {
+    Values = aaTypes,
+    Default = Rage.Config.PitchType or "static",
+}, function(value)
+    rage().Config.PitchType = value
+end)
 aaKids:Slider("pitch", {
     Min = -89,
     Max = 89,
@@ -7568,6 +9004,20 @@ aaKids:Slider("pitch", {
 }, function(value)
     rage().Config.PitchAmount = value
 end)
+aaKids:Slider("pitch ways", {
+    Min = 2,
+    Max = 10,
+    Default = Rage.Config.PitchWays or 7,
+    Decimals = 0,
+}, function(value)
+    rage().Config.PitchWays = value
+end)
+aaKids:Dropdown("yaw type", {
+    Values = aaTypes,
+    Default = Rage.Config.YawType or "static",
+}, function(value)
+    rage().Config.YawType = value
+end)
 aaKids:Slider("yaw", {
     Min = -180,
     Max = 180,
@@ -7576,6 +9026,44 @@ aaKids:Slider("yaw", {
     Suffix = "deg",
 }, function(value)
     rage().Config.YawAmount = value
+end)
+aaKids:Slider("yaw ways", {
+    Min = 2,
+    Max = 10,
+    Default = Rage.Config.YawWays or 7,
+    Decimals = 0,
+}, function(value)
+    rage().Config.YawWays = value
+end)
+aaKids:Slider("speed", {
+    Min = 1,
+    Max = 20,
+    Default = Rage.Config.AASpeed or 6,
+    Decimals = 1,
+}, function(value)
+    rage().Config.AASpeed = value
+end)
+local fakePos = antiAim:Toggle("fake position", Rage.Config.FakePosition, function(on)
+    rage().Config.FakePosition = on
+end)
+local fakePosKids = fakePos:Children()
+fakePosKids:Slider("distance", {
+    Min = 0,
+    Max = 14,
+    Default = Rage.Config.FakePositionDistance or 4,
+    Decimals = 1,
+    Suffix = "st",
+}, function(value)
+    rage().Config.FakePositionDistance = value
+end)
+fakePosKids:Slider("height", {
+    Min = -6,
+    Max = 6,
+    Default = Rage.Config.FakePositionHeight or 0,
+    Decimals = 1,
+    Suffix = "st",
+}, function(value)
+    rage().Config.FakePositionHeight = value
 end)
 local indicators = visualizing:Toggle("rage indicators", Rage.Config.Indicators ~= false, function(on)
     rage().Config.Indicators = on
@@ -7600,10 +9088,12 @@ resInd:ColorPicker(Rage.Config.IndicatorResolverCooldown or Color3.fromRGB(180, 
     rage().Config.IndicatorResolverCooldown = color
 end)
 
-fakeLag:Toggle("enable", Rage.Config.FakeLag, function(on)
+local fakeLagEnable = fakeLag:Toggle("enable", Rage.Config.FakeLag, function(on)
     rage().Config.FakeLag = on
-end):Keybind()
-fakeLag:Slider("amount", {
+end)
+fakeLagEnable:Keybind()
+local fakeLagKids = fakeLagEnable:Children()
+fakeLagKids:Slider("amount", {
     Min = 0,
     Max = 2.8,
     Default = math.clamp(tonumber(Rage.Config.FakeLagAmount) or 1.2, 0, 2.8),
@@ -7612,7 +9102,7 @@ fakeLag:Slider("amount", {
 }, function(value)
     rage().Config.FakeLagAmount = value
 end)
-fakeLag:Slider("hold", {
+fakeLagKids:Slider("hold", {
     Min = 0.05,
     Max = 3,
     Default = Rage.Config.FakeLagHold or 0.35,
@@ -7621,7 +9111,7 @@ fakeLag:Slider("hold", {
 }, function(value)
     rage().Config.FakeLagHold = value
 end)
-fakeLag:Slider("smooth", {
+fakeLagKids:Slider("smooth", {
     Min = 0,
     Max = 1,
     Default = Rage.Config.FakeLagSmooth or 0.45,
@@ -7629,57 +9119,123 @@ fakeLag:Slider("smooth", {
 }, function(value)
     rage().Config.FakeLagSmooth = value
 end)
+visualizing:Toggle("rage visual", Rage.Config.RageVisual, function(on)
+    rage().Config.RageVisual = on
+end)
+end
+buildRageUi()
 
-helpers:Dropdown("target part", { Values = { "head", "torso" }, Default = Aim.Config.TargetPart }, function(value)
-    aim().Config.TargetPart = value
-end)
-helpers:Toggle("visible check", Aim.Config.VisibleCheck, function(on)
-    aim().Config.VisibleCheck = on
-end)
-helpers:Slider("smoothness", { Min = 0, Max = 0.95, Default = Aim.Config.Smoothness, Decimals = 2 }, function(value)
-    aim().Config.Smoothness = value
-end)
-helpers:Slider("hit chance", { Min = 1, Max = 100, Default = Aim.Config.HitChance, Suffix = "%" }, function(value)
-    aim().Config.HitChance = value
-end)
-helpers:Slider("max distance", { Min = 50, Max = 2000, Default = Aim.Config.MaxDistance, Suffix = "st" }, function(value)
-    aim().Config.MaxDistance = value
-end)
-helpers:Dropdown("mouse key", { Values = { "right mouse", "left mouse", "always" }, Default = Aim.Config.MouseKey }, function(value)
-    aim().Config.MouseKey = value
-end)
-
+local function buildEspUi()
 local espBox = players:Groupbox("extra sensory shi", "left")
 for _, row in {
-    { "box", "ShowBoxes", "Box" },
     { "name", "ShowNames", "Name" },
     { "weapon", "ShowWeapon", "Weapon" },
     { "distance", "ShowDistance", "Distance" },
-    { "healthbar", "ShowHealth", "Health" },
 } do
     local text, setting, slot = row[1], row[2], row[3]
-    espSwatch(espBox:Toggle(text, ESP.Config[setting], function(on)
-        esp().Config[setting] = on
-    end), slot)
-end
-
-local extra = players:Groupbox("extra", "right")
-local highlight = extra:Toggle("highlight", ESP.Config.Highlight, function(on)
-    esp().Config.Highlight = on
-end)
-local highlightModes = highlight:Children()
-for _, row in {
-    { "visible", "HighlightVisible" },
-    { "occluded", "HighlightOccluded" },
-} do
-    local text, setting = row[1], row[2]
-    local mode = highlightModes:Toggle(text, ESP.Config[setting], function(on)
+    local toggle = espBox:Toggle(text, ESP.Config[setting], function(on)
         esp().Config[setting] = on
     end)
-    espSwatch(mode, setting .. "Fill")
-    espSwatch(mode, setting .. "Outline")
+    espSwatch(toggle, slot)
+    toggle:Settings(text):Toggle("outline", ESP.Config[slot .. "Outline"] ~= false, function(on)
+        esp().Config[slot .. "Outline"] = on
+    end)
 end
+local boxToggle = espBox:Toggle("box", ESP.Config.ShowBoxes, function(on)
+    esp().Config.ShowBoxes = on
+end)
+local boxCfg = boxToggle:Settings("box")
+boxCfg:Toggle("outline", ESP.Config.BoxOutline ~= false, function(on)
+    esp().Config.BoxOutline = on
+end)
+boxCfg:ColorPicker("color", ESP.Config.BoxColor, function(color)
+    esp().SetColor("Box", color, 1 - ESP.Config.BoxTransparency)
+end)
+boxCfg:ColorPicker("outline", ESP.Config.OutlineColor, function(color)
+    esp().SetColor("Outline", color, 1 - ESP.Config.OutlineTransparency)
+end)
+local healthToggle = espBox:Toggle("healthbar", ESP.Config.ShowHealth, function(on)
+    esp().Config.ShowHealth = on
+end)
+local healthCfg = healthToggle:Settings("healthbar")
+healthCfg:Toggle("outline", ESP.Config.HealthOutline ~= false, function(on)
+    esp().Config.HealthOutline = on
+end)
+healthCfg:ColorPicker("color", ESP.Config.HealthColor, function(color)
+    esp().SetColor("Health", color, 1 - ESP.Config.HealthTransparency)
+end)
+healthCfg:ColorPicker("low", ESP.Config.HealthLowColor, function(color)
+    esp().Config.HealthLowColor = color
+end)
+local snapToggle = espBox:Toggle("snaplines", ESP.Config.Snaplines, function(on)
+    esp().Config.Snaplines = on
+end)
+local snapCfg = snapToggle:Settings("snaplines")
+snapCfg:Toggle("outline", ESP.Config.SnaplineOutline ~= false, function(on)
+    esp().Config.SnaplineOutline = on
+end)
+snapCfg:ColorPicker("color", ESP.Config.SnaplineColor, function(color)
+    esp().Config.SnaplineColor = color
+end)
+local oovToggle = espBox:Toggle("oov arrows", ESP.Config.OOV, function(on)
+    esp().Config.OOV = on
+end)
+local oovCfg = oovToggle:Settings("oov arrows")
+oovCfg:Slider("radius", { Min = 40, Max = 400, Default = ESP.Config.OOVRadius or 180, Suffix = "px" }, function(value)
+    esp().Config.OOVRadius = value
+end)
+oovCfg:Slider("size", { Min = 8, Max = 32, Default = ESP.Config.OOVSize or 16 }, function(value)
+    esp().Config.OOVSize = value
+end)
+oovCfg:ColorPicker("color", ESP.Config.OOVColor, function(color)
+    esp().Config.OOVColor = color
+end)
 
+local extra = players:Groupbox("extra", "right")
+local highlight = extra:Toggle("chams", ESP.Config.Highlight, function(on)
+    esp().Config.Highlight = on
+end)
+local chamCfg = highlight:Settings("chams")
+chamCfg:Dropdown("mode", {
+    Values = { "highlight", "adornment" },
+    Default = ESP.Config.ChamsMode == "adornment" and "adornment" or "highlight",
+}, function(value)
+    esp().Config.ChamsMode = value == "adornment" and "adornment" or "highlight"
+end)
+chamCfg:Dropdown("adornment", {
+    Values = { "solid", "shaded", "glow", "glow 2x", "xray", "xray shaded", "plasma" },
+    Default = ESP.Config.AdornmentType or "solid",
+}, function(value)
+    esp().Config.AdornmentType = value
+end)
+chamCfg:Slider("glow", { Min = 0.25, Max = 4, Default = ESP.Config.AdornmentGlow or 1, Decimals = 2 }, function(value)
+    esp().Config.AdornmentGlow = value
+end)
+chamCfg:Toggle("per part", ESP.Config.HighlightPerPart, function(on)
+    esp().Config.HighlightPerPart = on
+end)
+chamCfg:Toggle("visible", ESP.Config.HighlightVisible, function(on)
+    esp().Config.HighlightVisible = on
+end)
+chamCfg:ColorPicker("visible fill", ESP.Config.HighlightVisibleFillColor, function(color)
+    esp().SetColor("HighlightVisibleFill", color, 1 - ESP.Config.HighlightVisibleFillTransparency)
+end)
+chamCfg:ColorPicker("visible line", ESP.Config.HighlightVisibleOutlineColor, function(color)
+    esp().SetColor("HighlightVisibleOutline", color, 1 - ESP.Config.HighlightVisibleOutlineTransparency)
+end)
+chamCfg:Toggle("occluded", ESP.Config.HighlightOccluded, function(on)
+    esp().Config.HighlightOccluded = on
+end)
+chamCfg:ColorPicker("occluded fill", ESP.Config.HighlightOccludedFillColor, function(color)
+    esp().SetColor("HighlightOccludedFill", color, 1 - ESP.Config.HighlightOccludedFillTransparency)
+end)
+chamCfg:ColorPicker("occluded line", ESP.Config.HighlightOccludedOutlineColor, function(color)
+    esp().SetColor("HighlightOccludedOutline", color, 1 - ESP.Config.HighlightOccludedOutlineTransparency)
+end)
+end
+buildEspUi()
+
+local function buildWorldUi()
 local mainWorld = worldTab:Groupbox("world", "left")
 local weatherBox = worldTab:Groupbox("weather", "right")
 local colorBox = worldTab:Groupbox("color correction", "left")
@@ -7699,6 +9255,41 @@ local clock = mainWorld:Toggle("clock time", World.Config.Clock, function(on)
 end):Settings("clock time")
 clock:Slider("time", { Min = 0, Max = 24, Default = World.Config.ClockTime, Decimals = 1 }, function(value)
     world().Set("ClockTime", value)
+end)
+local sun = mainWorld:Toggle("sun", World.Config.Sun, function(on)
+    world().Config.Sun = on
+    world().ForceApply()
+end)
+local sunCfg = sun:Settings("sun")
+sunCfg:Slider("brightness", { Min = 0, Max = 10, Default = World.Config.SunBrightness or 2, Decimals = 1 }, function(value)
+    world().Config.SunBrightness = value
+    world().ForceApply()
+end)
+sunCfg:Slider("size", { Min = 0, Max = 90, Default = World.Config.SunSize or 21 }, function(value)
+    world().Config.SunSize = value
+    world().ForceApply()
+end)
+local worldRemove = worldTab:Groupbox("removals", "right")
+worldRemove:Toggle("sun", World.Config.RemoveSun, function(on)
+    world().Config.RemoveSun = on
+    world().ForceApply()
+end)
+worldRemove:Toggle("moon", World.Config.RemoveMoon, function(on)
+    world().Config.RemoveMoon = on
+    world().ForceApply()
+end)
+worldRemove:Toggle("stars", World.Config.RemoveStars, function(on)
+    world().Config.RemoveStars = on
+    world().ForceApply()
+end)
+local texture = worldRemove:Toggle("texture", World.Config.WorldTexture, function(on)
+    world().Config.WorldTexture = on
+end)
+texture:Children():Dropdown("material", {
+    Values = { "SmoothPlastic", "Neon", "ForceField", "Glass", "Grass", "Slate", "Concrete", "Ice", "Metal", "DiamondPlate", "Foil" },
+    Default = World.Config.WorldMaterial or "SmoothPlastic",
+}, function(value)
+    world().Config.WorldMaterial = value
 end)
 
 local atmosphere = mainWorld:Toggle("atmosphere", World.Config.Fog, function(on)
@@ -7892,7 +9483,10 @@ end)
 dynamicKids:Slider("speed", { Min = 0.2, Max = 8, Default = World.Config.DynamicExposureSpeed, Decimals = 1 }, function(value)
     world().Set("DynamicExposureSpeed", value)
 end)
+end
+buildWorldUi()
 
+local function buildMiscUi()
 local movementBox = miscTab:Groupbox("movement", "left")
 local cameraBox = miscTab:Groupbox("camera", "right")
 local tracersBox = miscTab:Groupbox("tracers", "left")
@@ -7908,6 +9502,7 @@ local killsBox = effectsBox:Subtab("kill effects")
 local viewmodelModBox = miscTab:Groupbox("viewmodel modify", "right")
 local vmModifyTab = viewmodelModBox:Subtab("modify")
 local vmShootTab = viewmodelModBox:Subtab("shoot")
+local vmRemovalsTab = viewmodelModBox:Subtab("removals")
 
 local walk = movementBox:Toggle("walk speed", Misc.Config.WalkSpeed, function(on)
     misc().Config.WalkSpeed = on
@@ -7932,6 +9527,36 @@ end)
 bhop:Keybind()
 bhop:Children():Toggle("only while jumping", Misc.Config.OnlyWhileJumping, function(on)
     misc().Config.OnlyWhileJumping = on
+end)
+local slide = movementBox:Toggle("slide boost", Misc.Config.SlideBoost, function(on)
+    misc().Config.SlideBoost = on
+end)
+slide:Children():Slider("speed", { Min = 10, Max = 150, Default = Misc.Config.SlideBoostSpeed or 70, Suffix = "st/s" }, function(value)
+    misc().Config.SlideBoostSpeed = value
+end)
+movementBox:Toggle("no stamina", Misc.Config.NoStamina, function(on)
+    misc().Config.NoStamina = on
+end)
+movementBox:Toggle("no movement cooldown", Misc.Config.NoMoveCooldown, function(on)
+    misc().Config.NoMoveCooldown = on
+end)
+local height = movementBox:Toggle("height bypass", Misc.Config.HeightBypass, function(on)
+    misc().Config.HeightBypass = on
+end)
+height:Children():Slider("timer", { Min = 0.2, Max = 8, Default = Misc.Config.HeightBypassTime or 1.5, Decimals = 1, Suffix = "s" }, function(value)
+    misc().Config.HeightBypassTime = value
+end)
+movementBox:Toggle("z circle", Misc.Config.CircleJump, function(on)
+    misc().Config.CircleJump = on
+end)
+movementBox:Toggle("f zigzag", Misc.Config.ZigzagJump, function(on)
+    misc().Config.ZigzagJump = on
+end)
+movementBox:Toggle("pathfind", Misc.Config.Pathfind, function(on)
+    misc().Config.Pathfind = on
+end)
+movementBox:Slider("move smooth", { Min = 1, Max = 40, Default = Misc.Config.MoveSmooth or 12 }, function(value)
+    misc().Config.MoveSmooth = value
 end)
 
 local third = cameraBox:Toggle("third person", Misc.Config.ThirdPerson, function(on)
@@ -7974,14 +9599,14 @@ local fovCam = cameraBox:Toggle("fov", Misc.Config.FOV, function(on)
     misc().Config.FOV = on
 end)
 fovCam:Keybind()
-fovCam:Children():Slider("amount", { Min = 40, Max = 120, Default = Misc.Config.FOVAmount }, function(value)
+fovCam:Children():Slider("amount", { Min = 40, Max = 135, Default = Misc.Config.FOVAmount }, function(value)
     misc().Config.FOVAmount = value
 end)
 local aspect = cameraBox:Toggle("aspect ratio", Misc.Config.AspectRatio, function(on)
     misc().Config.AspectRatio = on
 end)
 aspect:Keybind()
-aspect:Children():Slider("ratio", { Min = 0.8, Max = 2.4, Default = Misc.Config.Aspect, Decimals = 2 }, function(value)
+aspect:Children():Slider("ratio", { Min = 0.4, Max = 3, Default = Misc.Config.Aspect, Decimals = 2 }, function(value)
     misc().Config.Aspect = value
 end)
 local viewmodel = cameraBox:Toggle("viewmodel", Misc.Config.Viewmodel, function(on)
@@ -7989,14 +9614,99 @@ local viewmodel = cameraBox:Toggle("viewmodel", Misc.Config.Viewmodel, function(
 end)
 viewmodel:Keybind()
 local vmKids = viewmodel:Children()
-vmKids:Slider("offset x", { Min = -3, Max = 3, Default = Misc.Config.ViewmodelX, Decimals = 2, Suffix = "st" }, function(value)
+vmKids:Slider("offset x", { Min = -8, Max = 8, Default = Misc.Config.ViewmodelX, Decimals = 2, Suffix = "st" }, function(value)
     misc().Config.ViewmodelX = value
 end)
-vmKids:Slider("offset y", { Min = -3, Max = 3, Default = Misc.Config.ViewmodelY, Decimals = 2, Suffix = "st" }, function(value)
+vmKids:Slider("offset y", { Min = -8, Max = 8, Default = Misc.Config.ViewmodelY, Decimals = 2, Suffix = "st" }, function(value)
     misc().Config.ViewmodelY = value
 end)
-vmKids:Slider("offset z", { Min = -3, Max = 3, Default = Misc.Config.ViewmodelZ, Decimals = 2, Suffix = "st" }, function(value)
+vmKids:Slider("offset z", { Min = -8, Max = 8, Default = Misc.Config.ViewmodelZ, Decimals = 2, Suffix = "st" }, function(value)
     misc().Config.ViewmodelZ = value
+end)
+local recoil = cameraBox:Toggle("recoil control", Misc.Config.RecoilControl, function(on)
+    misc().Config.RecoilControl = on
+end)
+recoil:Children():Slider("strength", { Min = 0, Max = 1, Default = Misc.Config.RecoilScale or 0.55, Decimals = 2 }, function(value)
+    misc().Config.RecoilScale = value
+end)
+local cross = cameraBox:Toggle("crosshair", Misc.Config.Crosshair, function(on)
+    misc().Config.Crosshair = on
+end)
+cross:ColorPicker(Misc.Config.CrosshairColor1, function(color)
+    misc().Config.CrosshairColor1 = color
+end)
+cross:ColorPicker(Misc.Config.CrosshairColor2, function(color)
+    misc().Config.CrosshairColor2 = color
+end)
+cross:ColorPicker(Misc.Config.CrosshairColor3, function(color)
+    misc().Config.CrosshairColor3 = color
+end)
+cross:ColorPicker(Misc.Config.CrosshairColor4, function(color)
+    misc().Config.CrosshairColor4 = color
+end)
+local crossKids = cross:Children()
+crossKids:Dropdown("place", {
+    Values = { "onscreen", "ingame" },
+    Default = Misc.Config.CrosshairMode == "ingame" and "ingame" or "onscreen",
+}, function(value)
+    misc().Config.CrosshairMode = value
+end)
+crossKids:Slider("thickness", { Min = 1, Max = 8, Default = Misc.Config.CrosshairThickness or 2 }, function(value)
+    misc().Config.CrosshairThickness = value
+end)
+crossKids:Slider("gap", { Min = 0, Max = 30, Default = Misc.Config.CrosshairGap or 4 }, function(value)
+    misc().Config.CrosshairGap = value
+end)
+crossKids:Slider("length", { Min = 1, Max = 40, Default = Misc.Config.CrosshairLength or 8 }, function(value)
+    misc().Config.CrosshairLength = value
+end)
+crossKids:Slider("bounce", { Min = 0, Max = 20, Default = Misc.Config.CrosshairBounce or 0 }, function(value)
+    misc().Config.CrosshairBounce = value
+end)
+crossKids:Slider("bounce speed", { Min = 0, Max = 20, Default = Misc.Config.CrosshairBounceSpeed or 6, Decimals = 1 }, function(value)
+    misc().Config.CrosshairBounceSpeed = value
+end)
+crossKids:Slider("spin", { Min = 0, Max = 4, Default = Misc.Config.CrosshairSpin or 0, Decimals = 2 }, function(value)
+    misc().Config.CrosshairSpin = value
+end)
+crossKids:Slider("spin speed", { Min = 0, Max = 360, Default = Misc.Config.CrosshairSpinSpeed or 90 }, function(value)
+    misc().Config.CrosshairSpinSpeed = value
+end)
+
+local removalsEnable = vmRemovalsTab:Toggle("enable", Misc.Config.Removals, function(on)
+    misc().Config.Removals = on
+    local cfg = misc().Config
+    cfg.RemoveDecals = on and cfg.RemoveItems and cfg.RemoveItems.decals or false
+    cfg.RemoveArms = on and cfg.RemoveItems and cfg.RemoveItems.arms or false
+    cfg.RemoveAnimations = on and cfg.RemoveItems and cfg.RemoveItems.animations or false
+    cfg.RemoveTeam = on and cfg.RemoveItems and cfg.RemoveItems.team or false
+    cfg.RemoveEnemy = on and cfg.RemoveItems and cfg.RemoveItems.enemy or false
+    cfg.RemoveExplosions = on and cfg.RemoveItems and cfg.RemoveItems.explosions or false
+    cfg.RemoveDroppedGuns = on and cfg.RemoveItems and cfg.RemoveItems.dropped or false
+end)
+local removalKids = removalsEnable:Children()
+removalKids:Dropdown("items", {
+    Multi = true,
+    Values = { "decals", "arms", "animations", "team", "enemy", "explosions", "dropped" },
+    Default = Misc.Config.RemoveItems or {},
+}, function(value)
+    misc().Config.RemoveItems = value
+    local cfg = misc().Config
+    local on = cfg.Removals == true
+    cfg.RemoveDecals = on and value.decals or false
+    cfg.RemoveArms = on and value.arms or false
+    cfg.RemoveAnimations = on and value.animations or false
+    cfg.RemoveTeam = on and value.team or false
+    cfg.RemoveEnemy = on and value.enemy or false
+    cfg.RemoveExplosions = on and value.explosions or false
+    cfg.RemoveDroppedGuns = on and value.dropped or false
+end)
+removalKids:Dropdown("hud", {
+    Multi = true,
+    Values = { "chat", "killfeed" },
+    Default = type(Misc.Config.RemoveHud) == "table" and Misc.Config.RemoveHud or {},
+}, function(value)
+    misc().Config.RemoveHud = value
 end)
 
 local function styleColors(section, colorTable, setColor)
@@ -8261,6 +9971,9 @@ end)
 armsKids:ColorPicker("color", Misc.Config.ArmsChamsColor or Color3.fromRGB(108, 147, 255), function(color)
     misc().Config.ArmsChamsColor = color
 end)
+armsKids:Slider("alpha", { Min = 0, Max = 0.92, Default = Misc.Config.ArmsChamsAlpha or 0, Decimals = 2 }, function(value)
+    misc().Config.ArmsChamsAlpha = value
+end)
 
 local bodyChams = vmModifyTab:Toggle("body", Misc.Config.BodyChams, function(on)
     misc().Config.BodyChams = on
@@ -8275,6 +9988,9 @@ end)
 bodyKids:ColorPicker("color", Misc.Config.BodyChamsColor or Color3.fromRGB(255, 190, 150), function(color)
     misc().Config.BodyChamsColor = color
 end)
+bodyKids:Slider("alpha", { Min = 0, Max = 0.92, Default = Misc.Config.BodyChamsAlpha or 0, Decimals = 2 }, function(value)
+    misc().Config.BodyChamsAlpha = value
+end)
 
 local weaponChams = vmModifyTab:Toggle("weapon", Misc.Config.WeaponChams, function(on)
     misc().Config.WeaponChams = on
@@ -8288,6 +10004,9 @@ weaponKids:Dropdown("material", {
 end)
 weaponKids:ColorPicker("color", Misc.Config.WeaponChamsColor or Color3.fromRGB(108, 147, 255), function(color)
     misc().Config.WeaponChamsColor = color
+end)
+weaponKids:Slider("alpha", { Min = 0, Max = 0.92, Default = Misc.Config.WeaponChamsAlpha or 0, Decimals = 2 }, function(value)
+    misc().Config.WeaponChamsAlpha = value
 end)
 
 local shootOn = vmShootTab:Toggle("enable", Misc.Config.ShootSounds, function(on)
@@ -8307,6 +10026,9 @@ shootKids:Dropdown("sound", {
 }, function(value)
     misc().Config.ShootSound = value
 end)
+shootKids:Textbox("custom file", { Default = Misc.Config.CustomSound or "", Placeholder = "sound.wav / .mp3 / rbxassetid://" }, function(value)
+    misc().Config.CustomSound = value
+end)
 shootKids:Slider("volume", { Min = 0, Max = 5, Default = Misc.Config.ShootSoundVolume or 1.2, Decimals = 2 }, function(value)
     misc().Config.ShootSoundVolume = value
 end)
@@ -8319,8 +10041,17 @@ shootKids:Button("preview", function()
         m.PlayShootSound(true)
     end
 end)
+end
+buildMiscUi()
 
-local serverTab = ensureTab("server")
+end)
+
+local okServer, errServer = pcall(function()
+local UI = getgenv().Tapology or getgenv().Library
+local serverTab = getgenv()._TapologyServerPage
+if not (UI and serverTab) then
+    return
+end
 if serverTab.Columns then
     for _, side in { "left", "right" } do
         local column = serverTab.Columns[side]
@@ -9211,6 +10942,9 @@ end)
 if not okMenu then
     getgenv()._TapologyMenuErr = tostring(errMenu)
     warn("[Tapology] menu build failed:", errMenu)
+elseif not okServer then
+    getgenv()._TapologyMenuErr = tostring(errServer)
+    warn("[Tapology] menu build failed:", errServer)
 else
     getgenv()._TapologyMenuErr = nil
     local list1 = Library and Library.Gui and Library.Gui:FindFirstChild("Window")
