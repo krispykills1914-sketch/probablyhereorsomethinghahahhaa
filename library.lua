@@ -234,23 +234,88 @@ function UI.Label(parent, text, props, options)
     return label
 end
 
+local dragJobs = {}
+local dragBound = false
+local dragCount = 0
+UI.Dragging = false
+local function setDragging(on)
+    if on then
+        dragCount += 1
+    else
+        dragCount = math.max(dragCount - 1, 0)
+    end
+    UI.Dragging = dragCount > 0
+end
+local function bindDrag()
+    if dragBound then
+        return
+    end
+    dragBound = true
+    connect(RunService.Heartbeat, function()
+        if dragCount <= 0 then
+            return
+        end
+        for frame, job in dragJobs do
+            local pending = job.pending
+            if job.dragging and pending and job.startMouse and job.startPosition then
+                job.pending = nil
+                local delta = pending - job.startMouse
+                if delta.X ~= 0 or delta.Y ~= 0 then
+                    local pos = job.startPosition
+                    frame.Position = UDim2.fromOffset(pos.X.Offset + delta.X, pos.Y.Offset + delta.Y)
+                end
+            end
+        end
+    end)
+end
+
 function UI.Draggable(frame, handle)
     handle = handle or frame
-    local dragging, startMouse, startPosition
+    local job = dragJobs[frame]
+    if not job then
+        job = { dragging = false }
+        dragJobs[frame] = job
+        bindDrag()
+    end
+    local function apply()
+        local pending = job.pending
+        if job.dragging and pending and job.startMouse and job.startPosition then
+            job.pending = nil
+            local delta = pending - job.startMouse
+            local pos = job.startPosition
+            frame.Position = UDim2.fromOffset(pos.X.Offset + delta.X, pos.Y.Offset + delta.Y)
+        end
+    end
     connect(handle.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging, startMouse, startPosition = true, input.Position, frame.Position
+            if not job.dragging then
+                job.dragging = true
+                setDragging(true)
+                local pos = frame.AbsolutePosition
+                if not UI.Gui.IgnoreGuiInset then
+                    local inset = GuiService:GetGuiInset()
+                    pos = Vector2.new(pos.X + inset.X, pos.Y + inset.Y)
+                end
+                frame.Position = UDim2.fromOffset(pos.X, pos.Y)
+                job.startMouse = input.Position
+                job.startPosition = frame.Position
+                job.pending = nil
+            end
         end
     end)
     connect(UserInputService.InputEnded, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
+            if job.dragging then
+                apply()
+                job.dragging = false
+                job.pending = nil
+                setDragging(false)
+            end
         end
     end)
     connect(UserInputService.InputChanged, function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - startMouse
-            frame.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+        if job.dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            job.pending = input.Position
         end
     end)
 end
@@ -465,7 +530,6 @@ local function childSection(anchor)
         frame:SetAttribute("Bottom", length)
     end
     connect(list:GetPropertyChangedSignal("AbsoluteSize"), fit)
-    connect(frame:GetPropertyChangedSignal("AbsolutePosition"), fit)
     connect(list.ChildAdded, function()
         task.defer(fit)
     end)
@@ -1234,9 +1298,18 @@ function UI.Slider(parent, text, options, callback)
     local slider = { Value = min }
     local hovered = false
     local function place()
+        if UI.Dragging then
+            return
+        end
         local fraction = (slider.Value - min) / math.max(max - min, 1e-9)
-        local width, textWidth = bar.AbsoluteSize.X, value.TextBounds.X + 2
-        local x = math.clamp(math.floor(fraction * width + 0.5), math.ceil(textWidth / 2), math.max(width - math.ceil(textWidth / 2), 0))
+        local width = bar.AbsoluteSize.X
+        if width <= 0 then
+            return
+        end
+        local half = math.ceil((value.TextBounds.X + 2) / 2)
+        local low = math.min(half, width)
+        local high = math.max(width - half, low)
+        local x = math.clamp(math.floor(fraction * width + 0.5), low, high)
         value.Position = UDim2.new(0, x, 1, 0)
     end
     local function paint()
@@ -1362,10 +1435,23 @@ function UI.Dropdown(parent, text, options, callback)
         }))
     end
     local wasOpen = false
+    local maxVisible = 10
 
     local list = popupFrame("Dropdown", field)
-    local listLayout = create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = list })
-    create("UIPadding", { PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2), Parent = list })
+    local scroller = create("ScrollingFrame", {
+        Name = "List",
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1),
+        CanvasSize = UDim2.new(),
+        ScrollBarThickness = 2,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        ZIndex = 21,
+        Parent = list,
+    })
+    theme(scroller, "ScrollBarImageColor3", "Accent")
+    local listLayout = create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = scroller })
+    create("UIPadding", { PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2), Parent = scroller })
 
     local dropdown = { Value = multi and {} or nil, Sections = {} }
     local hovered = false
@@ -1376,7 +1462,18 @@ function UI.Dropdown(parent, text, options, callback)
         end
         return dropdown.Value == option
     end
+    local function fitList()
+        local count = math.max(#values, 1)
+        local visible = math.min(count, maxVisible)
+        local height = visible * optionHeight + 4
+        list.Size = UDim2.fromOffset(math.max(field.AbsoluteSize.X, 80), height)
+        scroller.CanvasSize = UDim2.fromOffset(0, count * optionHeight + 4)
+        scroller.ScrollBarThickness = count > maxVisible and 2 or 0
+    end
     local function paint()
+        if UI.Dragging then
+            return
+        end
         if multi then
             local picked = {}
             for _, option in values do
@@ -1409,7 +1506,15 @@ function UI.Dropdown(parent, text, options, callback)
     end
     table.insert(UI.Refreshers, paint)
     connect(list:GetPropertyChangedSignal("Visible"), paint)
-    connect(field:GetPropertyChangedSignal("AbsoluteSize"), paint)
+    connect(field:GetPropertyChangedSignal("AbsoluteSize"), function()
+        if UI.Dragging then
+            return
+        end
+        paint()
+        if list.Visible then
+            fitList()
+        end
+    end)
 
     function dropdown:SetValues(newValues)
         values = newValues
@@ -1426,15 +1531,15 @@ function UI.Dropdown(parent, text, options, callback)
                 BorderSizePixel = 0,
                 Size = UDim2.new(1, 0, 0, optionHeight),
                 LayoutOrder = i,
-                ZIndex = 21,
-                Parent = list,
+                ZIndex = 22,
+                Parent = scroller,
             })
             local entry = {
                 Button = button,
                 Label = UI.Label(button, tostring(option), {
                     Position = UDim2.fromOffset(6, 0),
                     Size = UDim2.new(1, -12, 1, 0),
-                    ZIndex = 22,
+                    ZIndex = 23,
                 }, { Slot = "SubText", Outline = true }),
             }
             optionRows[option] = entry
@@ -1457,7 +1562,7 @@ function UI.Dropdown(parent, text, options, callback)
                 end
             end)
         end
-        list.Size = UDim2.fromOffset(field.AbsoluteSize.X, math.max(#values, 1) * optionHeight + 4)
+        fitList()
         paint()
     end
     dropdown:SetValues(values)
@@ -1466,7 +1571,6 @@ function UI.Dropdown(parent, text, options, callback)
         if multi then
             local set = {}
             for key, on in typeof(value) == "table" and value or {} do
-
                 if typeof(key) == "number" then
                     set[on] = true
                 elseif on then
@@ -1495,7 +1599,7 @@ function UI.Dropdown(parent, text, options, callback)
         if list.Visible then
             list.Visible = false
         else
-            list.Size = UDim2.fromOffset(field.AbsoluteSize.X, math.max(#values, 1) * optionHeight + 4)
+            fitList()
             openPopup(list, field, 0, field.AbsoluteSize.Y + 2)
         end
     end)
@@ -1729,12 +1833,12 @@ function UI.List(parent, text, options, callback)
         local function refit()
             task.defer(list.Resize, list)
         end
-        connect(box:GetPropertyChangedSignal("AbsolutePosition"), refit)
         connect(line.AncestryChanged, refit)
         task.defer(function()
             local page = line:FindFirstAncestorOfClass("ScrollingFrame")
             if page then
                 connect(page:GetPropertyChangedSignal("AbsoluteSize"), refit)
+                connect(page:GetPropertyChangedSignal("CanvasPosition"), refit)
             end
             list:Resize()
         end)
@@ -1993,7 +2097,17 @@ function UI.Window(size)
     addBorder(frame)
     registerPosition("__window", frame)
     local accent = 1
-    theme(create("Frame", { Name = "Accent", Size = UDim2.new(1, 0, 0, accent), BorderSizePixel = 0, ZIndex = 4, Parent = frame }), "BackgroundColor3", "Accent")
+    local accentBar = create("Frame", { Name = "Accent", Size = UDim2.new(1, 0, 0, accent), BorderSizePixel = 0, ZIndex = 4, Parent = frame })
+    theme(accentBar, "BackgroundColor3", "Accent")
+    local grab = create("TextButton", {
+        Name = "Grab",
+        Text = "",
+        AutoButtonColor = false,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, margin + accent + 4),
+        ZIndex = 5,
+        Parent = frame,
+    })
 
     local pages = create("Frame", {
         Name = "Pages",
@@ -2180,8 +2294,8 @@ function UI.Window(size)
         return page
     end
 
-    UI.Draggable(frame, frame)
-    UI.Draggable(frame, pages)
+    UI.Draggable(frame, grab)
+    UI.Draggable(frame, tabBar)
     return window
 end
 
@@ -2343,7 +2457,7 @@ do
     canvas:Destroy()
 end
 
-local window = UI.Window(UDim2.fromOffset(450, 530))
+local window = UI.Window(UDim2.fromOffset(505, 660))
 UI.Main = window
 UI.Pages = {}
 UI.Groups = {}
@@ -2425,7 +2539,7 @@ autoLabel(watermarkContent, "tapology", "Text", 1, true, 1)
 autoLabel(watermarkContent, ".pro", "Accent", 2, true, 1)
 UI.Watermark = watermark
 
-local WatermarkInfo = { "fps", "time", "game", "tick", "cpu usage" }
+local WatermarkInfo = { "fps", "time", "game", "ram", "cpu usage" }
 local watermarkItems = {}
 local gameName = "game"
 task.spawn(function()
@@ -2458,8 +2572,14 @@ local function infoText(name)
         return os.date("%H:%M:%S")
     elseif name == "game" then
         return gameName
-    elseif name == "tick" then
-        return `tick {math.floor(tick())}`
+    elseif name == "ram" then
+        local ok, mb = pcall(function()
+            return cloneref(game:GetService("Stats")):GetTotalMemoryUsageMb()
+        end)
+        if not ok then
+            return "ram n/a"
+        end
+        return string.format("ram %.0fmb", mb)
     elseif name == "cpu usage" then
         return cpuUsage()
     end
