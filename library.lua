@@ -64,12 +64,19 @@ do
 end
 
 getgenv()._TapologyMenuGen = (tonumber(getgenv()._TapologyMenuGen) or 0) + 1
-if env.Tapology then
-    env.Tapology.Unload()
+if type(env.Tapology) == "table" and type(env.Tapology.Unload) == "function" then
+    pcall(env.Tapology.Unload)
+else
+    env.Tapology = nil
+end
+if type(env.Library) == "table" and type(env.Library.Unload) == "function" then
+    pcall(env.Library.Unload)
+else
+    env.Library = nil
 end
 
-if env.UI and env.UI.Unload then
-    env.UI.Unload()
+if type(env.UI) == "table" and type(env.UI.Unload) == "function" then
+    pcall(env.UI.Unload)
 end
 
 local LocalPlayer = Players.LocalPlayer
