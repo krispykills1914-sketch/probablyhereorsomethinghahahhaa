@@ -23,7 +23,7 @@ local Config = {
     GameFolder = "phantom forces",
     MenuKey = Enum.KeyCode.RightControl,
     Logo = "rbxassetid://101443361081291",
-    SplashTime = 2,
+    SplashTime = 3,
     AutoloadTimeout = 10,
     FontName = "ProggyClean",
     FontUrl = "https://raw.githubusercontent.com/bluescan/proggyfonts/master/ProggyOriginal/ProggyClean.ttf",
@@ -77,6 +77,32 @@ end
 
 if type(env.UI) == "table" and type(env.UI.Unload) == "function" then
     pcall(env.UI.Unload)
+end
+
+do
+    local parents = { GuiParent }
+    local lp = Players.LocalPlayer
+    if lp then
+        local pg = lp:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            parents[#parents + 1] = pg
+        end
+    end
+    if typeof(gethui) == "function" then
+        local okHui, host = pcall(gethui)
+        if okHui and typeof(host) == "Instance" then
+            parents[#parents + 1] = host
+        end
+    end
+    for _, parent in parents do
+        if typeof(parent) == "Instance" then
+            for _, child in parent:GetChildren() do
+                if child.Name == "Tapology" and child:IsA("ScreenGui") then
+                    pcall(child.Destroy, child)
+                end
+            end
+        end
+    end
 end
 
 local LocalPlayer = Players.LocalPlayer
@@ -169,7 +195,7 @@ function UI.Label(parent, text, props, options)
         BackgroundTransparency = 1,
         FontFace = UI.Font,
         TextSize = Config.TextSize,
-        Text = text,
+        Text = (type(text) == "string" and text) or "",
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Center,
         Size = UDim2.new(1, 0, 0, Config.TextSize + 4),
@@ -199,6 +225,7 @@ function UI.Label(parent, text, props, options)
         local copy = create("TextLabel", {
             Name = "Layer",
             BackgroundTransparency = 1,
+            Text = "",
             Position = UDim2.fromOffset(layer.X, 0),
             Size = UDim2.fromScale(1, 1),
             ZIndex = label.ZIndex + i,
@@ -262,7 +289,7 @@ local function bindDrag()
                 local delta = pending - job.startMouse
                 if delta.X ~= 0 or delta.Y ~= 0 then
                     local pos = job.startPosition
-                    frame.Position = UDim2.fromOffset(pos.X.Offset + delta.X, pos.Y.Offset + delta.Y)
+                    frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
                 end
             end
         end
@@ -271,9 +298,12 @@ end
 
 function UI.Draggable(frame, handle)
     handle = handle or frame
+    if handle:IsA("GuiObject") then
+        handle.Active = true
+    end
     local job = dragJobs[frame]
     if not job then
-        job = { dragging = false }
+        job = { dragging = false, armed = false }
         dragJobs[frame] = job
         bindDrag()
     end
@@ -283,40 +313,162 @@ function UI.Draggable(frame, handle)
             job.pending = nil
             local delta = pending - job.startMouse
             local pos = job.startPosition
-            frame.Position = UDim2.fromOffset(pos.X.Offset + delta.X, pos.Y.Offset + delta.Y)
+            frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
         end
+    end
+    local function arm(input)
+        if job.dragging or job.armed then
+            return
+        end
+        job.armed = true
+        job.dragging = false
+        job.startMouse = input.Position
+        job.startPosition = frame.Position
+        job.pending = nil
+    end
+    local function release()
+        if job.dragging then
+            apply()
+            job.dragging = false
+            setDragging(false)
+        end
+        job.armed = false
+        job.pending = nil
     end
     connect(handle.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            arm(input)
+        end
+    end)
+    if not job.globalBound then
+        job.globalBound = true
+        connect(UserInputService.InputEnded, function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                release()
+            end
+        end)
+        connect(UserInputService.InputChanged, function(input)
+            if not (job.armed or job.dragging) then
+                return
+            end
+            if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            local delta = input.Position - job.startMouse
             if not job.dragging then
+                if math.abs(delta.X) < 3 and math.abs(delta.Y) < 3 then
+                    return
+                end
                 job.dragging = true
                 setDragging(true)
-                local pos = frame.AbsolutePosition
-                if not UI.Gui.IgnoreGuiInset then
-                    local inset = GuiService:GetGuiInset()
-                    pos = Vector2.new(pos.X + inset.X, pos.Y + inset.Y)
+            end
+            job.pending = input.Position
+        end)
+    end
+end
+
+function UI.WindowDraggable(frame)
+    if frame:IsA("GuiObject") then
+        frame.Active = true
+    end
+    local job = dragJobs[frame]
+    if not job then
+        job = { dragging = false, armed = false }
+        dragJobs[frame] = job
+        bindDrag()
+    end
+    if job.windowBound then
+        return
+    end
+    job.windowBound = true
+    local function inside(pos)
+        local p, s = frame.AbsolutePosition, frame.AbsoluteSize
+        return pos.X >= p.X and pos.Y >= p.Y and pos.X <= p.X + s.X and pos.Y <= p.Y + s.Y
+    end
+    local function overGroupbox(pos)
+        if not UI.Gui then
+            return false
+        end
+        local objects = UI.Gui:GetGuiObjectsAtPosition(pos.X, pos.Y)
+        for _, object in objects do
+            local node = object
+            while node and node ~= frame do
+                if node:GetAttribute("TapologyGroupbox") then
+                    return true
                 end
-                frame.Position = UDim2.fromOffset(pos.X, pos.Y)
-                job.startMouse = input.Position
-                job.startPosition = frame.Position
-                job.pending = nil
+                node = node.Parent
             end
         end
+        return false
+    end
+    local function topIsOurs(pos)
+        if not UI.Gui then
+            return false
+        end
+        local objects = UI.Gui:GetGuiObjectsAtPosition(pos.X, pos.Y)
+        for _, object in objects do
+            if object:IsA("TextBox") then
+                return false
+            end
+            if object:IsDescendantOf(frame) or object == frame then
+                return true
+            end
+        end
+        return false
+    end
+    connect(UserInputService.InputBegan, function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        if UI.Gui and UI.Gui.Enabled == false then
+            return
+        end
+        local pos = Vector2.new(input.Position.X, input.Position.Y)
+        if not inside(pos) or not topIsOurs(pos) or overGroupbox(pos) then
+            return
+        end
+        if job.dragging or job.armed then
+            return
+        end
+        job.armed = true
+        job.dragging = false
+        job.startMouse = input.Position
+        job.startPosition = frame.Position
+        job.pending = nil
     end)
     connect(UserInputService.InputEnded, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            if job.dragging then
-                apply()
-                job.dragging = false
-                job.pending = nil
-                setDragging(false)
-            end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
         end
+        if job.dragging then
+            local pending = job.pending
+            if pending and job.startMouse and job.startPosition then
+                local delta = pending - job.startMouse
+                local pos = job.startPosition
+                frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
+            end
+            job.dragging = false
+            setDragging(false)
+        end
+        job.armed = false
+        job.pending = nil
     end)
     connect(UserInputService.InputChanged, function(input)
-        if job.dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            job.pending = input.Position
+        if not (job.armed or job.dragging) then
+            return
         end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        local delta = input.Position - job.startMouse
+        if not job.dragging then
+            if math.abs(delta.X) < 3 and math.abs(delta.Y) < 3 then
+                return
+            end
+            job.dragging = true
+            setDragging(true)
+        end
+        job.pending = input.Position
     end)
 end
 
@@ -469,8 +621,9 @@ local function nextOrder(parent)
 end
 
 local function row(parent, name, height)
+    local rowName = (type(name) == "string" and name ~= "") and name or "Row"
     return create("TextButton", {
-        Name = name,
+        Name = rowName,
         Text = "",
         AutoButtonColor = false,
         BackgroundTransparency = 1,
@@ -637,6 +790,7 @@ function UI.Groupbox(column, title, path)
         Parent = column,
     })
     theme(box, "BackgroundColor3", "Background")
+    box:SetAttribute("TapologyGroupbox", true)
     outlined(box, "Shadow")
     outlined(create("Frame", {
         Name = "Rim",
@@ -1325,7 +1479,8 @@ function UI.Slider(parent, text, options, callback)
 
     function slider:Set(newValue)
         local step = 10 ^ -decimals
-        newValue = math.clamp(math.floor(newValue / step + 0.5) * step, min, max)
+        local lo, hi = math.min(min, max), math.max(min, max)
+        newValue = math.clamp(math.floor(newValue / step + 0.5) * step, lo, hi)
         local changed = newValue ~= slider.Value
         slider.Value = newValue
         paint()
@@ -1397,10 +1552,14 @@ end
 function UI.Dropdown(parent, text, options, callback)
     options = options or {}
     local values, multi = options.Values or {}, options.Multi
-    local labelHeight, fieldHeight, optionHeight = Config.TextSize + 4, Config.TextSize + 6, Config.TextSize + 6
-    local line = row(parent, text, labelHeight + fieldHeight)
+    local hasLabel = type(text) == "string" and text ~= ""
+    local labelHeight = hasLabel and Config.TextSize + 4 or 0
+    local fieldHeight, optionHeight = Config.TextSize + 6, Config.TextSize + 6
+    local line = row(parent, hasLabel and text or "Dropdown", labelHeight + fieldHeight)
     line:SetAttribute("Bottom", labelHeight + fieldHeight + 1)
-    UI.Label(line, text, { Position = UDim2.fromOffset(1, 0), Size = UDim2.new(1, -2, 0, labelHeight) }, { Outline = true })
+    if hasLabel then
+        UI.Label(line, text, { Position = UDim2.fromOffset(1, 0), Size = UDim2.new(1, -2, 0, labelHeight) }, { Outline = true })
+    end
 
     local field = create("TextButton", {
         Name = "Field",
@@ -1411,7 +1570,7 @@ function UI.Dropdown(parent, text, options, callback)
         BorderSizePixel = 0,
         Parent = line,
     })
-    shade(field, 0.6, 1)
+    theme(field, "BackgroundColor3", "Inline")
     outlined(field, "Shadow")
     local shown = UI.Label(field, "", {
         Position = UDim2.fromOffset(6, 0),
@@ -1471,9 +1630,6 @@ function UI.Dropdown(parent, text, options, callback)
         scroller.ScrollBarThickness = count > maxVisible and 2 or 0
     end
     local function paint()
-        if UI.Dragging then
-            return
-        end
         if multi then
             local picked = {}
             for _, option in values do
@@ -1486,7 +1642,9 @@ function UI.Dropdown(parent, text, options, callback)
             shown.Text = dropdown.Value ~= nil and tostring(dropdown.Value) or "none"
         end
 
-        shown.Text = fitText(shown.Text, field.AbsoluteSize.X - 6 - 16)
+        if not UI.Dragging then
+            shown.Text = fitText(shown.Text, field.AbsoluteSize.X - 6 - 16)
+        end
         if list.Visible ~= wasOpen then
             wasOpen = list.Visible
             TweenService:Create(chevron, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Rotation = wasOpen and 180 or 0 }):Play()
@@ -1896,7 +2054,7 @@ function UI.Textbox(parent, text, options, callback)
         Parent = line,
     })
     create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), Parent = field })
-    shade(field, 0.6, 1)
+    theme(field, "BackgroundColor3", "Inline")
     outlined(field, "Shadow")
 
     local display = create("Frame", { Name = "Display", BackgroundTransparency = 1, ClipsDescendants = true, Size = UDim2.fromScale(1, 1), Parent = field })
@@ -2090,6 +2248,7 @@ function UI.Window(size)
         Size = size,
         Position = UDim2.new(0.5, -size.X.Offset / 2, 0.5, -size.Y.Offset / 2),
         BorderSizePixel = 0,
+        Active = true,
         Parent = UI.Gui,
     })
     theme(frame, "BackgroundColor3", "Background")
@@ -2294,6 +2453,7 @@ function UI.Window(size)
         return page
     end
 
+    UI.WindowDraggable(frame)
     UI.Draggable(frame, grab)
     UI.Draggable(frame, tabBar)
     return window
@@ -2318,11 +2478,36 @@ function UI.Unload()
         end)
     end
     table.clear(Connections)
-    if UI.Gui then
+    local keepGone = UI.Gui
+    if keepGone then
         pcall(function()
-            UI.Gui:Destroy()
+            keepGone:Destroy()
         end)
     end
+    local parents = { GuiParent }
+    local lp = LocalPlayer
+    if lp then
+        local pg = lp:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            parents[#parents + 1] = pg
+        end
+    end
+    if typeof(gethui) == "function" then
+        local okHui, host = pcall(gethui)
+        if okHui and typeof(host) == "Instance" then
+            parents[#parents + 1] = host
+        end
+    end
+    for _, parent in parents do
+        if typeof(parent) == "Instance" then
+            for _, child in parent:GetChildren() do
+                if child.Name == "Tapology" and child:IsA("ScreenGui") then
+                    pcall(child.Destroy, child)
+                end
+            end
+        end
+    end
+    UI.Gui = nil
     if env.Tapology == UI then
         env.Tapology = nil
     end
@@ -2381,6 +2566,7 @@ do
         return count * charWidth() + 1 + 28
     end
     local started = os.clock()
+    print("[Tapology] Loading UI...")
     local canvas = create("CanvasGroup", {
         Name = "Splash",
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -2455,6 +2641,7 @@ do
 
     play(canvas, quart(0.35), { GroupTransparency = 1 }).Completed:Wait()
     canvas:Destroy()
+    print("[Tapology] Loaded UI")
 end
 
 local window = UI.Window(UDim2.fromOffset(505, 660))
