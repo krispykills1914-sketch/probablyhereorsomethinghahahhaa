@@ -35,6 +35,12 @@ do
     if type(prevServer) == "table" and type(prevServer.Stop) == "function" then
         pcall(prevServer.Stop)
     end
+    for _, key in { "Tapology", "Library" } do
+        local stub = getgenv()[key]
+        if type(stub) ~= "table" or type(stub.Unload) ~= "function" then
+            getgenv()[key] = nil
+        end
+    end
 end
 loadRemote("library")
 local Library = getgenv().Library or getgenv().Tapology
