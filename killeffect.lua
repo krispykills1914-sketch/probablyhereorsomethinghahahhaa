@@ -1,5 +1,7 @@
 do
 
+local warn = function() end
+
 local cloneref = cloneref or function(instance)
     return instance
 end
