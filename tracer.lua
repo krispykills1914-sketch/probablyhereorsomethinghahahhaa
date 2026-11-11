@@ -1,5 +1,7 @@
 do
 
+local warn = function() end
+
 local cloneref = cloneref or function(instance)
     return instance
 end
@@ -572,10 +574,10 @@ Styles.Void = {
     },
 }
 
-local function fire(from, to, styleName, hit)
+local function fire(from, to, styleName, hit, force)
     styleName = styleName or Config.Style
     local style, settings, colors = Styles[styleName], Config.Styles[styleName], Config.Colors[styleName]
-    if Unloaded or not Config.Enabled or not style or not settings or not colors then return end
+    if Unloaded or (not force and not Config.Enabled) or not style or not settings or not colors then return end
     local length = (to - from).Magnitude
     if length < 0.1 then return end
 
@@ -827,8 +829,8 @@ local function segmentTravel(from, to, styleName)
     return length / settings.Speed
 end
 
-local function firePath(points, styleName, hit)
-    if Unloaded or not Config.Enabled or type(points) ~= "table" or #points < 2 then
+local function firePath(points, styleName, hit, force)
+    if Unloaded or (not force and not Config.Enabled) or type(points) ~= "table" or #points < 2 then
         return
     end
     styleName = styleName or Config.Style
@@ -847,12 +849,12 @@ local function firePath(points, styleName, hit)
     end
 
     local function step(index)
-        if Unloaded or not Config.Enabled or index >= #cleaned then
+        if Unloaded or (not force and not Config.Enabled) or index >= #cleaned then
             return
         end
         local from, to = cleaned[index], cleaned[index + 1]
         local isLast = index + 1 >= #cleaned
-        fire(from, to, styleName, isLast and hit or nil)
+        fire(from, to, styleName, isLast and hit or nil, force)
         if index + 1 < #cleaned then
             local delay = segmentTravel(from, to, styleName)
             if delay <= 0 then
