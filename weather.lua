@@ -1,5 +1,7 @@
 do
 
+local warn = function() end
+
 local cloneref = cloneref or function(instance)
     return instance
 end
@@ -182,10 +184,12 @@ local function loadTextures()
 end
 
 local characterInterface
+local characterLookupDone = false
 local function resolveCharacterInterface()
-    if characterInterface then
+    if characterInterface or characterLookupDone then
         return characterInterface
     end
+    characterLookupDone = true
     if not getgc then
         return nil
     end
@@ -209,37 +213,26 @@ local function resolveCharacterInterface()
 end
 
 local function focusPosition()
+    local camera = workspace.CurrentCamera
+    if camera then
+        return camera.CFrame.Position
+    end
     local character = LocalPlayer.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if root then
         return root.Position
     end
-
     local ci = resolveCharacterInterface()
     if ci then
-        local alive = true
-        if ci.isAlive then
-            local okAlive, value = pcall(ci.isAlive)
-            if okAlive then
-                alive = value ~= false
+        local ok, object = pcall(ci.getCharacterObject)
+        if ok and object and object.getRootPart then
+            local okRoot, part = pcall(function()
+                return object:getRootPart()
+            end)
+            if okRoot and part and typeof(part.Position) == "Vector3" then
+                return part.Position
             end
         end
-        if alive then
-            local ok, object = pcall(ci.getCharacterObject)
-            if ok and object and object.getRootPart then
-                local okRoot, part = pcall(function()
-                    return object:getRootPart()
-                end)
-                if okRoot and part and typeof(part.Position) == "Vector3" then
-                    return part.Position
-                end
-            end
-        end
-    end
-
-    local camera = workspace.CurrentCamera
-    if camera then
-        return camera.CFrame.Position
     end
     return Vector3.zero
 end
@@ -295,7 +288,7 @@ end
 
 local ModeParamDefaults = {
     Snow = { Radius = 90, Density = 1, Wind = 1, Size = 1, Height = 26 },
-    Stars = { Radius = 90, Density = 1, Wind = 0.35, Size = 1, Height = 22, StarDistance = 500, CometRate = 1 },
+    Stars = { Radius = 70, Density = 0.7, Wind = 0.35, Size = 1, Height = 22, StarDistance = 280, CometRate = 0.55 },
     Rain = { Radius = 90, Density = 1, Wind = 1, Size = 1, Height = 30 },
     Ash = { Radius = 90, Density = 1, Wind = 1.2, Size = 1, Height = 26 },
     Spring = { Radius = 90, Density = 1, Wind = 0.8, Size = 1, Height = 22 },
@@ -332,7 +325,8 @@ end
 
 local function rateScale(name)
     local density = paramOf(name or (Active and Active.Name), "Density", Config.Density)
-    return density * (activeRadius(name) / 90) ^ 2
+    local area = (activeRadius(name) / 90) ^ 2
+    return math.clamp(density, 0.15, 1.25) * math.clamp(area, 0.25, 1.35) * 0.45
 end
 
 local function modeHeight(name)
@@ -544,7 +538,7 @@ end
 
 local function starDome(m, rate, brightness, colors)
     local distance = modeStarDistance(m.Name)
-    local scale = distance / 144
+    local scale = math.clamp(distance / 220, 0.45, 1.1)
 
     Dome.Size = Vector3.one * distance * 2
     for _, color in colors do
@@ -553,17 +547,17 @@ local function starDome(m, rate, brightness, colors)
             LockedToPart = true,
             Shape = Enum.ParticleEmitterShape.Sphere,
             ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
-            Rate = rate,
-            Lifetime = NumberRange.new(4, 8),
+            Rate = math.min(rate, 28),
+            Lifetime = NumberRange.new(5, 9),
             Speed = NumberRange.new(0),
             Rotation = NumberRange.new(0, 90),
-            Size = scaled(twinkle, rng:NextNumber(2.6, 3.6) * scale),
+            Size = scaled(twinkle, rng:NextNumber(2.2, 3.0) * scale),
             Color = ColorSequence.new(color),
             LightEmission = 1,
             LightInfluence = 0,
-            Brightness = brightness,
+            Brightness = math.min(brightness, 2.2),
         })
-        emitter:Emit(math.floor(emitter.Rate * 4))
+        emitter:Emit(math.min(math.floor(emitter.Rate * 1.5), 24))
     end
 end
 
@@ -647,39 +641,36 @@ mode("Stars", {
     Atmosphere = { Density = 0.1, Offset = 0, Color = rgb(80, 90, 140), Decay = rgb(40, 40, 80), Glare = 0, Haze = 0.3 },
     Clouds = { Cover = 0.15, Density = 0.1, Color = rgb(90, 95, 130) },
     Grade = { TintColor = rgb(225, 225, 255), Saturation = 0.15, Contrast = 0.06, Brightness = 0.03 },
-    Bloom = { Intensity = 1, Size = 40, Threshold = 0.9 },
+    Bloom = { Intensity = 0.35, Size = 18, Threshold = 1.15 },
 }, function(m)
-    starDome(m, 150, 5, { m.C("Star1"), m.C("Star2"), m.C("Star3") })
+    starDome(m, 24, 2.2, { m.C("Star1"), m.C("Star2"), m.C("Star3") })
     m.Emit(Volume, {
         Texture = Textures.star,
         EmissionDirection = Enum.NormalId.Bottom,
-        Rate = 140,
+        Rate = 28,
         Lifetime = NumberRange.new(6, 10),
         Speed = NumberRange.new(0.4, 1.4),
         SpreadAngle = Vector2.new(30, 30),
         RotSpeed = NumberRange.new(-30, 30),
-        Size = scaled(twinkle, 0.6),
+        Size = scaled(twinkle, 0.55),
         Color = colorSequence({ { 0, m.C("Dust") }, { 1, m.C("DustFade") } }),
         LightEmission = 1,
         LightInfluence = 0,
-        Brightness = 5,
+        Brightness = 2,
     }, 0.4)
 
     local auroraAnchor = newPart("Aurora", Vector3.one, m.Folder)
-    local radius = modeStarDistance(m.Name) * 0.6
-    local span = math.rad(58)
-    local green, cyan, violet, pink = m.C("AuroraGreen"), m.C("AuroraCyan"), m.C("AuroraViolet"), m.C("AuroraPink")
+    local radius = modeStarDistance(m.Name) * 0.55
+    local span = math.rad(50)
+    local green, cyan, violet = m.C("AuroraGreen"), m.C("AuroraCyan"), m.C("AuroraViolet")
     local palettes = {
         { green, cyan, green },
         { cyan, violet, cyan },
-        { green, green:Lerp(cyan, 0.5), cyan },
-        { pink, violet, cyan },
-        { green, green:Lerp(Color3.new(1, 1, 0.6), 0.3), cyan },
     }
     local curtains = {}
     for i, colors in palettes do
-        local start = (i - 1) / #palettes * math.pi * 2 + rng:NextNumber(-0.2, 0.2)
-        local height = rng:NextNumber(55, 110)
+        local start = (i - 1) / #palettes * math.pi * 2 + rng:NextNumber(-0.15, 0.15)
+        local height = rng:NextNumber(55, 95)
         local function ringPoint(angle, y)
             return Vector3.new(math.cos(angle) * radius, y, math.sin(angle) * radius)
         end
@@ -687,24 +678,24 @@ mode("Stars", {
             return Vector3.new(-math.sin(angle), 0, math.cos(angle))
         end
         local a0 = create("Attachment", { Position = ringPoint(start, height), Axis = tangent(start), Parent = auroraAnchor })
-        local a1 = create("Attachment", { Position = ringPoint(start + span, height + rng:NextNumber(-15, 15)), Axis = tangent(start + span), Parent = auroraAnchor })
-        local width = rng:NextNumber(60, 95)
+        local a1 = create("Attachment", { Position = ringPoint(start + span, height + rng:NextNumber(-12, 12)), Axis = tangent(start + span), Parent = auroraAnchor })
+        local width = rng:NextNumber(48, 72)
         local beam = create("Beam", {
             Attachment0 = a0,
             Attachment1 = a1,
             Texture = Textures.aurora,
             TextureMode = Enum.TextureMode.Wrap,
             TextureLength = 140,
-            TextureSpeed = rng:NextNumber(0.15, 0.35) * (rng:NextNumber() < 0.5 and -1 or 1),
+            TextureSpeed = rng:NextNumber(0.12, 0.28) * (rng:NextNumber() < 0.5 and -1 or 1),
             Width0 = width,
-            Width1 = width * rng:NextNumber(0.7, 1.1),
-            Segments = 48,
+            Width1 = width * rng:NextNumber(0.75, 1.05),
+            Segments = 8,
             FaceCamera = true,
             Color = colorSequence({ { 0, colors[1] }, { 0.5, colors[2] }, { 1, colors[3] } }),
-            Transparency = numberSequence({ { 0, 1 }, { 0.2, 0.3 }, { 0.8, 0.3 }, { 1, 1 } }),
+            Transparency = numberSequence({ { 0, 1 }, { 0.2, 0.35 }, { 0.8, 0.35 }, { 1, 1 } }),
             LightEmission = 1,
             LightInfluence = 0,
-            Brightness = 2.2,
+            Brightness = 1.4,
             Parent = auroraAnchor,
         })
 
@@ -712,17 +703,20 @@ mode("Stars", {
         curtains[i] = { Beam = beam, Handle = handle, Phase = i * 1.3 }
     end
 
-    local comets, nextAt = {}, 0
+    local comets, nextAt, lastAurora = {}, 0, 0
     m.Update = function(t, dt)
         auroraAnchor.CFrame = CFrame.new(focusPosition())
-        for _, curtain in curtains do
-            curtain.Beam.CurveSize0 = curtain.Handle * (1 + 0.25 * math.sin(t * 0.17 + curtain.Phase))
-            curtain.Beam.CurveSize1 = curtain.Handle * (1 + 0.25 * math.cos(t * 0.13 + curtain.Phase))
+        if t - lastAurora >= 0.12 then
+            lastAurora = t
+            for _, curtain in curtains do
+                curtain.Beam.CurveSize0 = curtain.Handle * (1 + 0.25 * math.sin(t * 0.17 + curtain.Phase))
+                curtain.Beam.CurveSize1 = curtain.Handle * (1 + 0.25 * math.cos(t * 0.13 + curtain.Phase))
+            end
         end
 
-        if t >= nextAt then
+        if t >= nextAt and #comets < 2 then
             local cometRate = math.max(paramOf(m.Name, "CometRate", 1), 0.1)
-            nextAt = t + rng:NextNumber(1.2, 3.5) / cometRate
+            nextAt = t + rng:NextNumber(2.2, 4.8) / cometRate
             local center = focusPosition()
             local area = activeRadius(m.Name)
             local angle = rng:NextNumber(0, math.pi * 2)
@@ -739,27 +733,15 @@ mode("Stars", {
                 Attachment1 = a1,
                 Texture = Textures.streak,
                 TextureMode = Enum.TextureMode.Stretch,
-                Lifetime = 0.45,
+                Lifetime = 0.3,
                 FaceCamera = true,
                 WidthScale = numberSequence({ { 0, 1 }, { 1, 0 } }),
                 Transparency = numberSequence({ { 0, 0 }, { 1, 1 } }),
                 Color = colorSequence({ { 0, m.C("Comet") }, { 1, m.C("CometTail") } }),
                 LightEmission = 1,
                 LightInfluence = 0,
-                Brightness = 6,
-                Parent = part,
-            })
-            create("ParticleEmitter", {
-                Texture = Textures.star,
-                LockedToPart = true,
-                Rate = 40,
-                Lifetime = NumberRange.new(0.08, 0.12),
-                Speed = NumberRange.new(0),
-                Size = NumberSequence.new(2),
-                Color = ColorSequence.new(m.C("Comet")),
-                LightEmission = 1,
-                LightInfluence = 0,
-                Brightness = 6,
+                Brightness = 2.2,
+                MaxLength = 60,
                 Parent = part,
             })
             table.insert(comets, { Part = part, Velocity = direction * rng:NextNumber(70, 110), Born = t })
@@ -767,7 +749,7 @@ mode("Stars", {
 
         for i = #comets, 1, -1 do
             local comet = comets[i]
-            if t - comet.Born > 1.4 then
+            if t - comet.Born > 1.2 then
                 comet.Part:Destroy()
                 table.remove(comets, i)
             else
@@ -1673,7 +1655,11 @@ local function startMode(name)
     end
 
     function m.Emit(parent, props, windScale)
-        props.Rate = props.Rate * rateScale(name)
+        local rate = (tonumber(props.Rate) or 0) * rateScale(name)
+        props.Rate = math.clamp(rate, 0, 90)
+        if props.Brightness and props.Brightness > 2.5 then
+            props.Brightness = 2.5
+        end
         if props.Size then
             props.Size = scaleSequence(props.Size, modeSizeScale(name))
         end
@@ -1683,12 +1669,16 @@ local function startMode(name)
         table.insert(m.Emitters, entry)
 
         if parent == Sky and not props.LockedToPart then
-            local prewarm = emitter:Clone()
-            prewarm.Enabled = false
-            prewarm.Parent = Column
-            prewarm:Emit(math.min(math.floor(props.Rate * props.Lifetime.Max * 0.5), 2000))
-            table.insert(m.Emitters, { Emitter = prewarm, Base = entry.Base, Wind = entry.Wind })
-            task.delay(props.Lifetime.Max, prewarm.Destroy, prewarm)
+            local lifetime = props.Lifetime and props.Lifetime.Max or 1
+            local burst = math.min(math.floor(props.Rate * lifetime * 0.2), 40)
+            if burst > 0 then
+                local prewarm = emitter:Clone()
+                prewarm.Enabled = false
+                prewarm.Parent = Column
+                prewarm:Emit(burst)
+                table.insert(m.Emitters, { Emitter = prewarm, Base = entry.Base, Wind = entry.Wind })
+                task.delay(lifetime, prewarm.Destroy, prewarm)
+            end
         end
         return emitter
     end
@@ -1752,7 +1742,6 @@ local function setMode(name, force)
         startMode(name)
     end
     saveSettings()
-    print(`[Weather] {name}`)
 end
 
 local function cycleMode()
@@ -1760,15 +1749,28 @@ local function cycleMode()
     setMode(ModeOrder[index % #ModeOrder + 1])
 end
 
-local function update(dt)
+local lastGround = nil
+local lastGroundAt = 0
+local lastGustAt = 0
+local cachedGust = Vector3.zero
+local lastWeatherTick = 0
 
+local function update(dt)
     local m = Active
     if not m or Config.Mode == "Off" then
         return
     end
 
     local center = focusPosition()
-    local ground = groundBelow(center, center.Y - 3)
+    local now = os.clock()
+    local ground
+    if lastGround and now - lastGroundAt < 0.2 then
+        ground = Vector3.new(center.X, lastGround.Y, center.Z)
+    else
+        ground = groundBelow(center, center.Y - 3)
+        lastGround = ground
+        lastGroundAt = now
+    end
     local camera = workspace.CurrentCamera.CFrame.Position
     local height = m.Height or Config.Height
     local radius = activeRadius(m.Name)
@@ -1796,7 +1798,6 @@ local function update(dt)
     NearSky.Size = Vector3.new(36, 1, 36)
     NearGround.Size = Vector3.new(36, 0.2, 36)
     NearSky.CFrame = CFrame.new(center.X, center.Y + math.min(height, 18), center.Z)
-
     NearGround.CFrame = CFrame.new(center.X, ground.Y + 0.05, center.Z)
     Dome.CFrame = CFrame.new(center)
     Lens.Size = Vector3.new(24, 18, 24)
@@ -1805,11 +1806,14 @@ local function update(dt)
     m.Time += dt
     local t = m.Time
 
-    local gust = Config.Wind * modeWindScale(m.Name) * (1 + 0.6 * math.sin(t * 0.35))
-        + Vector3.new(math.sin(t * 0.7), 0, math.cos(t * 0.5)) * 0.8 * modeWindScale(m.Name)
-    for _, entry in m.Emitters do
-        if entry.Wind ~= 0 then
-            entry.Emitter.Acceleration = entry.Base + gust * entry.Wind
+    if now - lastGustAt >= 0.1 then
+        lastGustAt = now
+        cachedGust = Config.Wind * modeWindScale(m.Name) * (1 + 0.6 * math.sin(t * 0.35))
+            + Vector3.new(math.sin(t * 0.7), 0, math.cos(t * 0.5)) * 0.8 * modeWindScale(m.Name)
+        for _, entry in m.Emitters do
+            if entry.Wind ~= 0 and entry.Emitter and entry.Emitter.Parent then
+                entry.Emitter.Acceleration = entry.Base + cachedGust * entry.Wind
+            end
         end
     end
 
@@ -1828,7 +1832,7 @@ local function main()
     captureEnvironment()
 
     local size = Config.Radius * 2
-    Container = create("Folder", { Name = "Weather", Parent = workspace.CurrentCamera })
+    Container = create("Folder", { Name = "TapologyWeather", Parent = workspace.CurrentCamera })
     Sky = newPart("Sky", Vector3.new(size, 1, size), Container)
     Column = newPart("Column", Vector3.new(size, Config.Height, size), Container)
     Volume = newPart("Volume", Vector3.new(size, 24, size), Container)
@@ -1843,7 +1847,15 @@ local function main()
         startMode(Config.Mode)
     end
 
-    table.insert(Connections, RunService.RenderStepped:Connect(update))
+    table.insert(Connections, RunService.Heartbeat:Connect(function(dt)
+        local now = os.clock()
+        if now - lastWeatherTick < 1 / 20 then
+            return
+        end
+        local step = now - lastWeatherTick
+        lastWeatherTick = now
+        update(math.clamp(step, 0.05, 0.1))
+    end))
     table.insert(Connections, UserInputService.InputBegan:Connect(function(input, processed)
         if processed or not Config.Hotkeys or not UserInputService:IsKeyDown(Config.Modifier) then return end
         if input.KeyCode == Config.CycleKey then
