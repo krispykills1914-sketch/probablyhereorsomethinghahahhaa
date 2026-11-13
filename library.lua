@@ -1,3 +1,16 @@
+--// tapology.pro UI library \\--
+-- Load it with:  local Library = loadstring(game:HttpGet("<raw url of this file>"))()
+-- It builds the window with the settings tab (configs, themes, menu/watermark/hotkeys toggles), the
+-- watermark and the hotkeys overlay, and returns the library (also getgenv().Tapology). Add your own tabs
+-- with Library:Tab(name) (they go in front of settings), then groupboxes with page:Groupbox(title, side).
+-- Right control (Config.MenuKey) opens/closes the menu; Library:Notify(text, duration?) shows a notification.
+--
+-- Text uses ProggyClean at Config.TextSize: the font is downloaded once into the executor workspace
+-- (tapology/fonts/) and loaded through a font family file, since custom fonts must be referenced by a
+-- JSON family that points at the TTF.
+-- Colors: edit Config.Theme or call Library.SetColor(slot, color); everything themed updates live.
+
+-- Services go through cloneref (falls back to the plain reference if the executor lacks it).
 local cloneref = cloneref or function(instance)
     return instance
 end
@@ -10,7 +23,8 @@ local TextService = cloneref(game:GetService("TextService"))
 local RunService = cloneref(game:GetService("RunService"))
 local GuiService = cloneref(game:GetService("GuiService"))
 local CoreGui = cloneref(game:GetService("CoreGui"))
-
+-- Parenting must use a raw container; some executors' cloneref(CoreGui) later throw
+-- "lacking capability Plugin" when creating more UI after a long script body.
 local GuiParent = game:GetService("CoreGui")
 
 local function rgb(r, g, b)
@@ -20,22 +34,22 @@ end
 local Config = {
     Folder = "tapology",
     FontFolder = "tapology/fonts",
-    GameFolder = "phantom forces",
-    MenuKey = Enum.KeyCode.RightControl,
-    Logo = "rbxassetid://101443361081291",
-    SplashTime = 3,
-    AutoloadTimeout = 10,
+    GameFolder = "phantom forces", -- configs are saved per game in tapology/games/<GameFolder>/
+    MenuKey = Enum.KeyCode.RightControl, -- opens/closes the menu (rebindable in settings > config)
+    Logo = "rbxassetid://101443361081291", -- the uploaded tapology logo (not shown anywhere right now)
+    SplashTime = 2, -- seconds the splash holds before fading out and the menu loading
+    AutoloadTimeout = 10, -- autoload anyway after this many seconds if the script never adds a tab
     FontName = "ProggyClean",
     FontUrl = "https://raw.githubusercontent.com/bluescan/proggyfonts/master/ProggyOriginal/ProggyClean.ttf",
     TextSize = 12,
-    Bold = true,
-    BoldStrength = 0.4,
-    Spacing = 6,
-    TabTween = 0.25,
-    ToggleTween = 0.22,
-    HoverLighten = 0.06,
-    Indent = 12,
-
+    Bold = true, -- tab names and groupbox titles draw a second copy 1px over for a thicker ProggyClean
+    BoldStrength = 0.4, -- opacity of that copy: 0 = regular, 1 = full bold
+    Spacing = 6, -- padding inside pages and groupboxes, and the gap between columns and groupboxes
+    TabTween = 0.25, -- seconds for the selected-tab highlight to slide to a new tab
+    ToggleTween = 0.22, -- seconds for a toggle's box to fill or drain
+    HoverLighten = 0.06, -- how much lighter elements get while hovered
+    Indent = 12, -- left indent of child elements under a parent toggle/dropdown
+    -- Window border rings from the window's edge outward: { theme slot, thickness in px }.
     Border = {
         { "Shadow", 1 },
         { "Outline", 4 },
@@ -43,8 +57,8 @@ local Config = {
     },
     Theme = {
         TextOutline = rgb(0, 0, 0),
-        Shadow = rgb(8, 8, 10),
-        Highlight = rgb(54, 54, 60),
+        Shadow = rgb(8, 8, 10), -- outer edge and inner shadow of sunken panels
+        Highlight = rgb(54, 54, 60), -- inner rim of sunken panels
         Background = rgb(36, 36, 38),
         Inline = rgb(24, 24, 26),
         Outline = rgb(56, 56, 60),
@@ -55,62 +69,21 @@ local Config = {
 }
 
 local env = getgenv and getgenv() or _G
-
-do
-    local prev = getgenv()._TapologyServer
-    if type(prev) == "table" and type(prev.Stop) == "function" then
-        pcall(prev.Stop)
-    end
+if env.Tapology then
+    env.Tapology.Unload()
 end
-
-getgenv()._TapologyMenuGen = (tonumber(getgenv()._TapologyMenuGen) or 0) + 1
-if type(env.Tapology) == "table" and type(env.Tapology.Unload) == "function" then
-    pcall(env.Tapology.Unload)
-else
-    env.Tapology = nil
-end
-if type(env.Library) == "table" and type(env.Library.Unload) == "function" then
-    pcall(env.Library.Unload)
-else
-    env.Library = nil
-end
-
-if type(env.UI) == "table" and type(env.UI.Unload) == "function" then
-    pcall(env.UI.Unload)
-end
-
-do
-    local parents = { GuiParent }
-    local lp = Players.LocalPlayer
-    if lp then
-        local pg = lp:FindFirstChildOfClass("PlayerGui")
-        if pg then
-            parents[#parents + 1] = pg
-        end
-    end
-    if typeof(gethui) == "function" then
-        local okHui, host = pcall(gethui)
-        if okHui and typeof(host) == "Instance" then
-            parents[#parents + 1] = host
-        end
-    end
-    for _, parent in parents do
-        if typeof(parent) == "Instance" then
-            for _, child in parent:GetChildren() do
-                if child.Name == "Tapology" and child:IsA("ScreenGui") then
-                    pcall(child.Destroy, child)
-                end
-            end
-        end
-    end
+-- The library used to load as getgenv().UI; unload that too so the two never stack.
+if env.UI and env.UI.Unload then
+    env.UI.Unload()
 end
 
 local LocalPlayer = Players.LocalPlayer
 local Connections = {}
-local Themed = {}
+local Themed = {} -- { Instance, Property, Slot }
 
 local UI = { Config = Config, Refreshers = {}, Hotkeys = {} }
 
+--// Helpers \\--
 local function create(className, props)
     props = props or {}
     local instance = Instance.new(className)
@@ -133,12 +106,14 @@ local function create(className, props)
     return instance
 end
 
+-- Sets instance[property] from a theme slot and keeps it in sync with SetColor.
 local function theme(instance, property, slot)
     instance[property] = Config.Theme[slot]
     table.insert(Themed, { instance, property, slot })
     return instance
 end
 
+-- Runs step(elapsed) every frame while it returns true, then calls done().
 local function heartbeatUntil(step, done)
     local elapsed, connection = 0, nil
     connection = RunService.Heartbeat:Connect(function(dt)
@@ -159,6 +134,7 @@ local function connect(signal, callback)
     return connection
 end
 
+--// Font \\--
 local function loadFont()
     for _, folder in { Config.Folder, Config.FontFolder } do
         if not isfolder(folder) then
@@ -186,8 +162,12 @@ if not ok then
 end
 UI.Font = font
 
+--// Elements \\--
 local Mirrored = { "Text", "TextColor3", "TextTransparency", "TextXAlignment", "TextYAlignment", "TextSize", "FontFace", "TextWrapped" }
 
+-- options: Slot = theme slot for the text color ("Text"), Outline = TextOutline stroke around it, Bold = thicker.
+-- ProggyClean has a single weight, so bold draws a second, fainter copy (Config.BoldStrength) 1px to the
+-- right. Outlines go on copies beneath the fill copies, so a stroke never covers glyphs.
 function UI.Label(parent, text, props, options)
     options = options or {}
     local slot, outline = options.Slot, options.Outline
@@ -195,7 +175,7 @@ function UI.Label(parent, text, props, options)
         BackgroundTransparency = 1,
         FontFace = UI.Font,
         TextSize = Config.TextSize,
-        Text = (type(text) == "string" and text) or "",
+        Text = text,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Center,
         Size = UDim2.new(1, 0, 0, Config.TextSize + 4),
@@ -206,6 +186,8 @@ function UI.Label(parent, text, props, options)
         label[key] = value
     end
 
+    -- Copies are children of the label at offsets (relative to it); the label itself is the first layer.
+    -- A UIStroke ignores TextTransparency, so every outline is faded along with the label's text.
     local layers, strokes = {}, {}
     local offsets = (options.Bold and Config.Bold) and { 1 } or {}
     if outline then
@@ -225,7 +207,6 @@ function UI.Label(parent, text, props, options)
         local copy = create("TextLabel", {
             Name = "Layer",
             BackgroundTransparency = 1,
-            Text = "",
             Position = UDim2.fromOffset(layer.X, 0),
             Size = UDim2.fromScale(1, 1),
             ZIndex = label.ZIndex + i,
@@ -261,217 +242,29 @@ function UI.Label(parent, text, props, options)
     return label
 end
 
-local dragJobs = {}
-local dragBound = false
-local dragCount = 0
-UI.Dragging = false
-local function setDragging(on)
-    if on then
-        dragCount += 1
-    else
-        dragCount = math.max(dragCount - 1, 0)
-    end
-    UI.Dragging = dragCount > 0
-end
-local function bindDrag()
-    if dragBound then
-        return
-    end
-    dragBound = true
-    connect(RunService.Heartbeat, function()
-        if dragCount <= 0 then
-            return
-        end
-        for frame, job in dragJobs do
-            local pending = job.pending
-            if job.dragging and pending and job.startMouse and job.startPosition then
-                job.pending = nil
-                local delta = pending - job.startMouse
-                if delta.X ~= 0 or delta.Y ~= 0 then
-                    local pos = job.startPosition
-                    frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
-                end
-            end
-        end
-    end)
-end
-
+-- Drag `frame` by holding the mouse on `handle` (defaults to the frame itself).
 function UI.Draggable(frame, handle)
     handle = handle or frame
-    if handle:IsA("GuiObject") then
-        handle.Active = true
-    end
-    local job = dragJobs[frame]
-    if not job then
-        job = { dragging = false, armed = false }
-        dragJobs[frame] = job
-        bindDrag()
-    end
-    local function apply()
-        local pending = job.pending
-        if job.dragging and pending and job.startMouse and job.startPosition then
-            job.pending = nil
-            local delta = pending - job.startMouse
-            local pos = job.startPosition
-            frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
-        end
-    end
-    local function arm(input)
-        if job.dragging or job.armed then
-            return
-        end
-        job.armed = true
-        job.dragging = false
-        job.startMouse = input.Position
-        job.startPosition = frame.Position
-        job.pending = nil
-    end
-    local function release()
-        if job.dragging then
-            apply()
-            job.dragging = false
-            setDragging(false)
-        end
-        job.armed = false
-        job.pending = nil
-    end
+    local dragging, startMouse, startPosition
     connect(handle.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            arm(input)
+            dragging, startMouse, startPosition = true, input.Position, frame.Position
         end
-    end)
-    if not job.globalBound then
-        job.globalBound = true
-        connect(UserInputService.InputEnded, function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                release()
-            end
-        end)
-        connect(UserInputService.InputChanged, function(input)
-            if not (job.armed or job.dragging) then
-                return
-            end
-            if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-            local delta = input.Position - job.startMouse
-            if not job.dragging then
-                if math.abs(delta.X) < 3 and math.abs(delta.Y) < 3 then
-                    return
-                end
-                job.dragging = true
-                setDragging(true)
-            end
-            job.pending = input.Position
-        end)
-    end
-end
-
-function UI.WindowDraggable(frame)
-    if frame:IsA("GuiObject") then
-        frame.Active = true
-    end
-    local job = dragJobs[frame]
-    if not job then
-        job = { dragging = false, armed = false }
-        dragJobs[frame] = job
-        bindDrag()
-    end
-    if job.windowBound then
-        return
-    end
-    job.windowBound = true
-    local function inside(pos)
-        local p, s = frame.AbsolutePosition, frame.AbsoluteSize
-        return pos.X >= p.X and pos.Y >= p.Y and pos.X <= p.X + s.X and pos.Y <= p.Y + s.Y
-    end
-    local function overGroupbox(pos)
-        if not UI.Gui then
-            return false
-        end
-        local objects = UI.Gui:GetGuiObjectsAtPosition(pos.X, pos.Y)
-        for _, object in objects do
-            local node = object
-            while node and node ~= frame do
-                if node:GetAttribute("TapologyGroupbox") then
-                    return true
-                end
-                node = node.Parent
-            end
-        end
-        return false
-    end
-    local function topIsOurs(pos)
-        if not UI.Gui then
-            return false
-        end
-        local objects = UI.Gui:GetGuiObjectsAtPosition(pos.X, pos.Y)
-        for _, object in objects do
-            if object:IsA("TextBox") then
-                return false
-            end
-            if object:IsDescendantOf(frame) or object == frame then
-                return true
-            end
-        end
-        return false
-    end
-    connect(UserInputService.InputBegan, function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
-        if UI.Gui and UI.Gui.Enabled == false then
-            return
-        end
-        local pos = Vector2.new(input.Position.X, input.Position.Y)
-        if not inside(pos) or not topIsOurs(pos) or overGroupbox(pos) then
-            return
-        end
-        if job.dragging or job.armed then
-            return
-        end
-        job.armed = true
-        job.dragging = false
-        job.startMouse = input.Position
-        job.startPosition = frame.Position
-        job.pending = nil
     end)
     connect(UserInputService.InputEnded, function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
-            return
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
         end
-        if job.dragging then
-            local pending = job.pending
-            if pending and job.startMouse and job.startPosition then
-                local delta = pending - job.startMouse
-                local pos = job.startPosition
-                frame.Position = UDim2.new(pos.X.Scale, pos.X.Offset + delta.X, pos.Y.Scale, pos.Y.Offset + delta.Y)
-            end
-            job.dragging = false
-            setDragging(false)
-        end
-        job.armed = false
-        job.pending = nil
     end)
     connect(UserInputService.InputChanged, function(input)
-        if not (job.armed or job.dragging) then
-            return
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - startMouse
+            frame.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
         end
-        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
-        local delta = input.Position - job.startMouse
-        if not job.dragging then
-            if math.abs(delta.X) < 3 and math.abs(delta.Y) < 3 then
-                return
-            end
-            job.dragging = true
-            setDragging(true)
-        end
-        job.pending = input.Position
     end)
 end
 
+-- Miter joins fill the corner pixels (the default round join leaves them empty).
 local function outlined(instance, slot)
     theme(create("UIStroke", {
         Thickness = 1,
@@ -482,11 +275,14 @@ local function outlined(instance, slot)
     return instance
 end
 
+-- Vertical shading (a UIGradient multiplies the background color, so it follows the theme).
 local function shade(instance, top, bottom)
     create("UIGradient", { Rotation = 90, Color = ColorSequence.new(Color3.new(top, top, top), Color3.new(bottom, bottom, bottom)), Parent = instance })
     return instance
 end
 
+-- Sunken panel: dark outer edge, faint highlight on the inner rim, darker toward the top, and soft inner
+-- shadows cast along the top and left edges (beneath the panel's contents).
 local function inset(instance)
     outlined(instance, "Shadow")
     outlined(create("Frame", {
@@ -515,6 +311,9 @@ local function inset(instance)
     return shade(instance, 0.6, 1)
 end
 
+--// Containers \\--
+-- Every element lives in a container: a groupbox's content, or a child section under a parent toggle or
+-- dropdown. Containers share the element methods, so any element can be nested under a parent element.
 local Container = {}
 Container.__index = Container
 
@@ -553,8 +352,12 @@ function Container:Label(text)
     return UI.Label(self.Frame, text, { LayoutOrder = #self.Frame:GetChildren() * 10 }, { Slot = "SubText", Outline = true })
 end
 
+--// Flags \\--
+-- Every saveable element registers a flag (its path, e.g. "legit/aim assist/fov") with a Get/Set pair that
+-- turns its value into plain JSON data and back; configs save and load all of them. Container frames carry
+-- a "Path" attribute that child sections inherit. options.Flag overrides the path; options.Save = false skips.
 UI.Flags = {}
-UI.LastRegistered = os.clock()
+UI.LastRegistered = os.clock() -- when an element was last created (autoload waits for this to settle)
 local function register(parent, text, options, get, set)
     UI.LastRegistered = os.clock()
     if options and options.Save == false then return end
@@ -574,7 +377,7 @@ end
 local function decodeUDim2(data)
     return UDim2.new(data[1], data[2], data[3], data[4])
 end
-
+-- Saves a frame's position (for the window and overlays).
 local function registerPosition(flag, frame)
     UI.Flags[flag] = {
         Get = function()
@@ -586,6 +389,8 @@ local function registerPosition(flag, frame)
     }
 end
 
+-- Bevelled border (Config.Border): stroke-only rings stacked outward from a frame's edge, so they never
+-- cover what's inside it.
 local function addBorder(frame)
     local offset = 0
     for i, ring in Config.Border do
@@ -606,6 +411,8 @@ local function addBorder(frame)
     end
 end
 
+-- Rows are spaced 10 apart in LayoutOrder so a child section can slot in right below its parent's row.
+-- Prefer a local counter: some executors throw "lacking capability Plugin" on GetChildren mid-load.
 local layoutOrders = setmetatable({}, { __mode = "k" })
 local function nextOrder(parent)
     local ok, count = pcall(function()
@@ -621,9 +428,8 @@ local function nextOrder(parent)
 end
 
 local function row(parent, name, height)
-    local rowName = (type(name) == "string" and name ~= "") and name or "Row"
     return create("TextButton", {
-        Name = rowName,
+        Name = name,
         Text = "",
         AutoButtonColor = false,
         BackgroundTransparency = 1,
@@ -633,14 +439,21 @@ local function row(parent, name, height)
     })
 end
 
+-- Toggle boxes are an odd size so the child guide line can sit exactly on their center column.
 local ToggleBox = Config.TextSize - 1
-local RowGap = 4
+local RowGap = 4 -- UIListLayout padding between rows
 
+-- Where an element visibly ends, measured from the top of its row: rows set a "Bottom" attribute (their
+-- box/bar/field's bottom border pixel); anything else ends at its full height.
 local function visualBottom(gui)
     local bottom = gui:GetAttribute("Bottom")
     return gui.AbsolutePosition.Y + (bottom or gui.AbsoluteSize.Y)
 end
 
+-- An indented section right below `anchor` (a parent element's row), with a guide line down its left.
+-- The parent shows or hides it; hidden sections take no space, so groupboxes shrink to fit.
+-- The guide runs down the center column of the parent's toggle box (rows start 1px in), from the top of
+-- the first child (leaving the usual row gap under the parent) to the bottom pixel of the last child.
 local function childSection(anchor)
     local frame = create("Frame", {
         Name = anchor.Name .. " children",
@@ -679,10 +492,11 @@ local function childSection(anchor)
         end
         local length = last and math.max(visualBottom(last) - frame.AbsolutePosition.Y, 0) or 0
         guide.Size = UDim2.fromOffset(1, length)
-
+        -- Lets a parent section end its own guide at this section's guide end.
         frame:SetAttribute("Bottom", length)
     end
     connect(list:GetPropertyChangedSignal("AbsoluteSize"), fit)
+    connect(frame:GetPropertyChangedSignal("AbsolutePosition"), fit)
     connect(list.ChildAdded, function()
         task.defer(fit)
     end)
@@ -699,12 +513,14 @@ local function textWidth(text)
     return ok and bounds.X or #text * 7
 end
 
+-- ProggyClean is monospaced, so one measured character gives every string's width.
 local CharWidth
 local function charWidth()
     CharWidth = CharWidth or textWidth("m")
     return CharWidth
 end
 
+-- Cuts text to fit `width` pixels, ending in "..." (the font has no single ellipsis glyph).
 local function fitText(text, width)
     local fits = math.floor(width / charWidth())
     if width <= 0 or #text <= fits then
@@ -717,6 +533,7 @@ local function lighten(color, amount)
     return color:Lerp(Color3.new(1, 1, 1), amount or Config.HoverLighten)
 end
 
+-- Fill shading shared by toggles, sliders and swatches: a 90 degree gradient, bright at the top.
 local function fillGradient(instance)
     create("UIGradient", {
         Rotation = 90,
@@ -734,6 +551,8 @@ local function isClick(input)
     return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
 end
 
+-- Calls onMove(point) while the mouse is held after pressing on `surface`. input.Position is in the same
+-- space as AbsolutePosition, so the point lines up exactly with what's under the cursor.
 local function dragArea(surface, onMove)
     local held = false
     connect(surface.InputBegan, function(input)
@@ -754,6 +573,8 @@ local function dragArea(surface, onMove)
     end)
 end
 
+-- Popups (color pickers, dropdown lists) sit on top of the window. Only one is open at a time, and a click
+-- anywhere outside the popup and its opener closes it.
 local Popup = { Open = nil }
 local function popupFrame(name, opener)
     local frame = create("Frame", { Name = name, BorderSizePixel = 0, Visible = false, ZIndex = 20, Parent = UI.Gui })
@@ -772,13 +593,18 @@ local function openPopup(frame, opener, x, y)
     if Popup.Open and Popup.Open ~= frame then
         Popup.Open.Visible = false
     end
-
+    -- Offsets in this IgnoreGuiInset ScreenGui count from the top of the screen; AbsolutePosition counts from
+    -- below the top bar inset.
     local inset = GuiService:GetGuiInset()
     frame.Position = UDim2.fromOffset(opener.AbsolutePosition.X + inset.X + x, opener.AbsolutePosition.Y + inset.Y + y)
     frame.Visible = true
     Popup.Open = frame
 end
 
+--// Groupbox \\--
+-- A raised box in a page column: title, separator, and a content area that ends after its last element.
+-- Returns a container (add elements with :Toggle, :Slider, :ColorPicker, :Dropdown, ...), or split it into
+-- subtabs with group:Subtab(name). path prefixes its elements' flags (defaults to the title).
 function UI.Groupbox(column, title, path)
     local titleHeight = Config.TextSize + 8
     local box = create("Frame", {
@@ -790,7 +616,6 @@ function UI.Groupbox(column, title, path)
         Parent = column,
     })
     theme(box, "BackgroundColor3", "Background")
-    box:SetAttribute("TapologyGroupbox", true)
     outlined(box, "Shadow")
     outlined(create("Frame", {
         Name = "Rim",
@@ -835,6 +660,8 @@ function UI.Groupbox(column, title, path)
     local group = container(content)
     group.Box, group.Title, group.Subtabs = box, title, {}
 
+    -- Subtabs replace the title with their names; the selected one is accent colored (no bar). Each returns
+    -- its own container.
     local header
     local function paintSubtabs()
         for _, tab in group.Subtabs do
@@ -905,6 +732,10 @@ function UI.Groupbox(column, title, path)
     return group
 end
 
+--// Toggle \\--
+-- A checkbox row. Turning it on fills the box from the bottom up with the accent color; turning it off
+-- drains it back down. Returns { Value, Set(value), ColorPicker(color, callback, options),
+-- AlphaColorPicker(color, alpha, callback, options), Children() }.
 function UI.Toggle(parent, text, default, callback, options)
     local size = ToggleBox
     local rowHeight = Config.TextSize + 4
@@ -960,14 +791,15 @@ function UI.Toggle(parent, text, default, callback, options)
             task.spawn(callback, value)
         end
     end
-
+    -- Swatches on the right of this toggle's row (call it again, or chain :ColorPicker /
+    -- :AlphaColorPicker, for more).
     function toggle:ColorPicker(color, onChange, swatchOptions)
         return UI.Swatch(line, color, onChange, swatchOptions)
     end
     function toggle:AlphaColorPicker(color, alpha, onChange, swatchOptions)
         return UI.AlphaSwatch(line, color, alpha, onChange, swatchOptions)
     end
-
+    -- A keybind on the right of this toggle's row; pressing the key flips the toggle.
     function toggle:Keybind(key, onPress)
         toggle.Bind = UI.Keybind(line, key, function()
             toggle:Set(not toggle.Value)
@@ -975,7 +807,7 @@ function UI.Toggle(parent, text, default, callback, options)
                 onPress(toggle.Value)
             end
         end)
-
+        -- Listed in the hotkeys overlay; "enabled" toggles are named after their groupbox instead.
         local path = parent:GetAttribute("Path") or ""
         table.insert(UI.Hotkeys, {
             Name = text == "enabled" and (path:match("([^/]+)$") or text) or text,
@@ -984,11 +816,11 @@ function UI.Toggle(parent, text, default, callback, options)
         })
         return toggle.Bind
     end
-
+    -- A "..." config window of extra options for this toggle; returns its container.
     function toggle:Settings(title)
         return UI.ConfigWindow(line, title or text)
     end
-
+    -- Child elements, shown while this toggle is on.
     function toggle:Children()
         local section = childSection(line)
         table.insert(toggle.Sections, section)
@@ -1016,6 +848,9 @@ function UI.Toggle(parent, text, default, callback, options)
     return toggle
 end
 
+-- Right-aligned strip across the top line of a row that holds its keybind and color swatches. Items keep
+-- the order they're added in (keybinds go first, left of any swatches). It's a plain Frame, so clicks on
+-- empty parts of it still reach the row.
 local function accessories(line)
     local strip = line:FindFirstChild("Accessories")
     if not strip then
@@ -1038,9 +873,13 @@ local function accessories(line)
     return strip
 end
 
+--// Config window \\--
+-- A "..." button at the right end of a row that opens a floating window of extra options for it, styled
+-- like the main window. Returns a container for its elements (sliders, dropdowns, toggles, text fields...).
+-- Clicking outside it closes it, except inside a dropdown list / color picker it opened.
 local OpenConfigWindow
 local function configWindow(line, title)
-
+    -- Three outlined 2x2 dots, starting on the toggle box's middle row (periods would sit on the baseline).
     local rowHeight = Config.TextSize + 4
     local dots = create("TextButton", {
         Name = "Settings",
@@ -1130,7 +969,7 @@ local function configWindow(line, title)
         if OpenConfigWindow and OpenConfigWindow ~= frame then
             OpenConfigWindow.Visible = false
         end
-
+        -- Opens just right of the "..." button, level with the row.
         local inset = GuiService:GetGuiInset()
         frame.Position = UDim2.fromOffset(dots.AbsolutePosition.X + dots.AbsoluteSize.X + 12 + inset.X, line.AbsolutePosition.Y - 2 + inset.Y)
         fit()
@@ -1160,6 +999,12 @@ local function configWindow(line, title)
 end
 UI.ConfigWindow = configWindow
 
+--// Color picker \\--
+-- Two kinds of color swatch sit on the right of a row; clicking one opens a picker popup below it:
+--   UI.Swatch      - saturation/value square, hue bar and readout. callback(color), flag saves "rrggbb".
+--   UI.AlphaSwatch - the same plus an alpha bar (opacity, 0-1). callback(color, alpha), flag saves "rrggbbaa".
+-- picker:ColorPicker / picker:AlphaColorPicker add another swatch of either kind to the same row.
+-- Returns { Value, Alpha, Set(color, alpha?), Swatch, ColorPicker, AlphaColorPicker }.
 local function makeSwatch(parent, default, alpha, callback, options)
     local hasAlpha = type(alpha) == "number"
     local strip = accessories(parent)
@@ -1231,6 +1076,7 @@ local function makeSwatch(parent, default, alpha, callback, options)
     })
     outlined(hueCursor, "Shadow")
 
+    -- Alpha bar: the current color fading from opaque (top) to clear (bottom) over a dark backing.
     local alphaBar, alphaFill, alphaCursor
     if hasAlpha then
         alphaBar = create("TextButton", {
@@ -1304,15 +1150,15 @@ local function makeSwatch(parent, default, alpha, callback, options)
     function picker:AlphaColorPicker(color, startAlpha, onChange, swatchOptions)
         return UI.AlphaSwatch(parent, color, startAlpha, onChange, swatchOptions)
     end
-
+    -- "..." config window; placed left of this swatch (auras / color rows).
     function picker:Settings(title)
         local line = parent:IsA("GuiObject") and parent or swatch.Parent
         if line and line.Name == "Accessories" then
             line = line.Parent
         end
         local section = UI.ConfigWindow(line, title or "settings")
-        local strip = line and line:FindFirstChild("Accessories")
-        local settingsBtn = strip and strip:FindFirstChild("Settings")
+        local strip = accessories(line)
+        local settingsBtn = strip:FindFirstChild("Settings")
         if settingsBtn then
             settingsBtn.LayoutOrder = -10
         end
@@ -1343,6 +1189,8 @@ local function makeSwatch(parent, default, alpha, callback, options)
         end
     end)
 
+    -- Right-click: a small copy / paste menu. Copy keeps the color on a clipboard shared by every swatch
+    -- (and puts its hex on the system clipboard too); paste applies the copied color.
     local menu = popupFrame("ColorMenu", swatch)
     menu.Size = UDim2.fromOffset(90, 0)
     menu.AutomaticSize = Enum.AutomaticSize.Y
@@ -1387,7 +1235,7 @@ local function makeSwatch(parent, default, alpha, callback, options)
         end
     end)
     paint()
-
+    -- Flag: the row's container path + row name, e.g. "legit/aim assist/target colors/color".
     picker.Flag = register(parent.Parent, `{parent.Name}/color`, options, function()
         local hex = picker.Value:ToHex()
         return hasAlpha and hex .. string.format("%02x", math.floor(picker.Alpha * 255 + 0.5)) or hex
@@ -1406,6 +1254,7 @@ function UI.AlphaSwatch(parent, default, alpha, callback, options)
     return makeSwatch(parent, default, type(alpha) == "number" and alpha or 1, callback, options)
 end
 
+-- A labelled row with a color swatch (or alpha swatch) on the right. Returns the swatch's picker.
 local function colorRow(parent, text)
     local line = row(parent, text)
     line:SetAttribute("Bottom", math.floor((Config.TextSize + 4 + Config.TextSize - 2) / 2) + 1)
@@ -1419,6 +1268,10 @@ function UI.AlphaColorPicker(parent, text, default, alpha, callback, options)
     return UI.AlphaSwatch(colorRow(parent, text), default, alpha, callback, options)
 end
 
+--// Slider \\--
+-- A plain fill bar (no knob) that follows the mouse instantly. The value text rides the end of the fill,
+-- centered on the bar's bottom edge. options: Min, Max, Default, Decimals (0), Suffix ("").
+-- Returns { Value, Set(value) }.
 function UI.Slider(parent, text, options, callback)
     options = options or {}
     local min, max = options.Min or 0, options.Max or 100
@@ -1452,18 +1305,9 @@ function UI.Slider(parent, text, options, callback)
     local slider = { Value = min }
     local hovered = false
     local function place()
-        if UI.Dragging then
-            return
-        end
         local fraction = (slider.Value - min) / math.max(max - min, 1e-9)
-        local width = bar.AbsoluteSize.X
-        if width <= 0 then
-            return
-        end
-        local half = math.ceil((value.TextBounds.X + 2) / 2)
-        local low = math.min(half, width)
-        local high = math.max(width - half, low)
-        local x = math.clamp(math.floor(fraction * width + 0.5), low, high)
+        local width, textWidth = bar.AbsoluteSize.X, value.TextBounds.X + 2
+        local x = math.clamp(math.floor(fraction * width + 0.5), math.ceil(textWidth / 2), math.max(width - math.ceil(textWidth / 2), 0))
         value.Position = UDim2.new(0, x, 1, 0)
     end
     local function paint()
@@ -1479,8 +1323,7 @@ function UI.Slider(parent, text, options, callback)
 
     function slider:Set(newValue)
         local step = 10 ^ -decimals
-        local lo, hi = math.min(min, max), math.max(min, max)
-        newValue = math.clamp(math.floor(newValue / step + 0.5) * step, lo, hi)
+        newValue = math.clamp(math.floor(newValue / step + 0.5) * step, min, max)
         local changed = newValue ~= slider.Value
         slider.Value = newValue
         paint()
@@ -1496,6 +1339,8 @@ function UI.Slider(parent, text, options, callback)
         slider:Set(min + (max - min) * math.clamp((point.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1))
     end)
 
+    -- Ctrl + left click: a small input box under the bar that's already focused, so you can type a value
+    -- straight away; Enter applies it (clamped and rounded like dragging), anything else just closes it.
     local entry
     local function openEntry()
         if not entry then
@@ -1549,6 +1394,10 @@ function UI.Slider(parent, text, options, callback)
     return slider
 end
 
+--// Dropdown \\--
+-- A labelled field showing the current choice; clicking it opens the option list right below it.
+-- options: Values (list), Default, Multi (Value becomes a { [option] = true } set). Returns
+-- { Value, Set(value), Children(option) } -- children are shown while `option` is selected.
 function UI.Dropdown(parent, text, options, callback)
     options = options or {}
     local values, multi = options.Values or {}, options.Multi
@@ -1570,13 +1419,14 @@ function UI.Dropdown(parent, text, options, callback)
         BorderSizePixel = 0,
         Parent = line,
     })
-    theme(field, "BackgroundColor3", "Inline")
+    shade(field, 0.6, 1)
     outlined(field, "Shadow")
     local shown = UI.Label(field, "", {
         Position = UDim2.fromOffset(6, 0),
         Size = UDim2.new(1, -22, 1, 0),
     }, { Outline = true })
-
+    -- Pixel chevron (5x3), vertically centered in the field; it spins to point up while the list is open.
+    -- A 180 degree turn maps every pixel onto another pixel, so it stays crisp at both ends.
     local chevron = create("Frame", {
         Name = "Chevron",
         Position = UDim2.new(1, -12, 0, math.floor((fieldHeight - 3) / 2)),
@@ -1594,23 +1444,10 @@ function UI.Dropdown(parent, text, options, callback)
         }))
     end
     local wasOpen = false
-    local maxVisible = 10
 
     local list = popupFrame("Dropdown", field)
-    local scroller = create("ScrollingFrame", {
-        Name = "List",
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        Size = UDim2.fromScale(1, 1),
-        CanvasSize = UDim2.new(),
-        ScrollBarThickness = 2,
-        ScrollingDirection = Enum.ScrollingDirection.Y,
-        ZIndex = 21,
-        Parent = list,
-    })
-    theme(scroller, "ScrollBarImageColor3", "Accent")
-    local listLayout = create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = scroller })
-    create("UIPadding", { PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2), Parent = scroller })
+    local listLayout = create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = list })
+    create("UIPadding", { PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2), Parent = list })
 
     local dropdown = { Value = multi and {} or nil, Sections = {} }
     local hovered = false
@@ -1620,14 +1457,6 @@ function UI.Dropdown(parent, text, options, callback)
             return dropdown.Value[option] == true
         end
         return dropdown.Value == option
-    end
-    local function fitList()
-        local count = math.max(#values, 1)
-        local visible = math.min(count, maxVisible)
-        local height = visible * optionHeight + 4
-        list.Size = UDim2.fromOffset(math.max(field.AbsoluteSize.X, 80), height)
-        scroller.CanvasSize = UDim2.fromOffset(0, count * optionHeight + 4)
-        scroller.ScrollBarThickness = count > maxVisible and 2 or 0
     end
     local function paint()
         if multi then
@@ -1641,10 +1470,8 @@ function UI.Dropdown(parent, text, options, callback)
         else
             shown.Text = dropdown.Value ~= nil and tostring(dropdown.Value) or "none"
         end
-
-        if not UI.Dragging then
-            shown.Text = fitText(shown.Text, field.AbsoluteSize.X - 6 - 16)
-        end
+        -- Ends in "..." rather than running under the chevron (which sits 12px from the right edge).
+        shown.Text = fitText(shown.Text, field.AbsoluteSize.X - 6 - 16)
         if list.Visible ~= wasOpen then
             wasOpen = list.Visible
             TweenService:Create(chevron, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Rotation = wasOpen and 180 or 0 }):Play()
@@ -1664,16 +1491,9 @@ function UI.Dropdown(parent, text, options, callback)
     end
     table.insert(UI.Refreshers, paint)
     connect(list:GetPropertyChangedSignal("Visible"), paint)
-    connect(field:GetPropertyChangedSignal("AbsoluteSize"), function()
-        if UI.Dragging then
-            return
-        end
-        paint()
-        if list.Visible then
-            fitList()
-        end
-    end)
+    connect(field:GetPropertyChangedSignal("AbsoluteSize"), paint)
 
+    -- (Re)builds the option rows in the list popup.
     function dropdown:SetValues(newValues)
         values = newValues
         for _, entry in optionRows do
@@ -1689,15 +1509,15 @@ function UI.Dropdown(parent, text, options, callback)
                 BorderSizePixel = 0,
                 Size = UDim2.new(1, 0, 0, optionHeight),
                 LayoutOrder = i,
-                ZIndex = 22,
-                Parent = scroller,
+                ZIndex = 21,
+                Parent = list,
             })
             local entry = {
                 Button = button,
                 Label = UI.Label(button, tostring(option), {
                     Position = UDim2.fromOffset(6, 0),
                     Size = UDim2.new(1, -12, 1, 0),
-                    ZIndex = 23,
+                    ZIndex = 22,
                 }, { Slot = "SubText", Outline = true }),
             }
             optionRows[option] = entry
@@ -1720,7 +1540,7 @@ function UI.Dropdown(parent, text, options, callback)
                 end
             end)
         end
-        fitList()
+        list.Size = UDim2.fromOffset(field.AbsoluteSize.X, math.max(#values, 1) * optionHeight + 4)
         paint()
     end
     dropdown:SetValues(values)
@@ -1729,6 +1549,7 @@ function UI.Dropdown(parent, text, options, callback)
         if multi then
             local set = {}
             for key, on in typeof(value) == "table" and value or {} do
+                -- Accepts a set ({ head = true }) or a list ({ "head" }).
                 if typeof(key) == "number" then
                     set[on] = true
                 elseif on then
@@ -1743,7 +1564,7 @@ function UI.Dropdown(parent, text, options, callback)
             task.spawn(callback, value)
         end
     end
-
+    -- Child elements, shown while `option` is selected.
     function dropdown:Children(option)
         local section = childSection(line)
         section.Option = option
@@ -1757,7 +1578,7 @@ function UI.Dropdown(parent, text, options, callback)
         if list.Visible then
             list.Visible = false
         else
-            fitList()
+            list.Size = UDim2.fromOffset(field.AbsoluteSize.X, math.max(#values, 1) * optionHeight + 4)
             openPopup(list, field, 0, field.AbsoluteSize.Y + 2)
         end
     end)
@@ -1778,6 +1599,7 @@ function UI.Dropdown(parent, text, options, callback)
     return dropdown
 end
 
+--// Keybind \\--
 local KeyNames = {
     LeftShift = "lshift", RightShift = "rshift", LeftControl = "lctrl", RightControl = "rctrl",
     LeftAlt = "lalt", RightAlt = "ralt", Return = "enter", Backspace = "bksp", CapsLock = "caps",
@@ -1787,6 +1609,10 @@ local function keyName(key)
     return key and (KeyNames[key.Name] or key.Name:lower()) or "..."
 end
 
+-- A key binding box on the right of a row, showing the bound key ("..." when unbound). Click it and it
+-- throbs while it waits for a key or mouse button (Escape or Backspace unbinds), then tweens its width to
+-- fit the new name. Pressing the bound key (outside text boxes) calls onPress.
+-- Returns { Value (Enum.KeyCode, Enum.UserInputType for mouse buttons, or nil), Set(key) }.
 function UI.Keybind(line, default, onPress)
     local height = Config.TextSize
     local box = create("TextButton", {
@@ -1834,7 +1660,7 @@ function UI.Keybind(line, default, onPress)
         bind.Listening = true
         resize()
         paint()
-
+        -- Throb: pulse the text while waiting.
         heartbeatUntil(function(elapsed)
             label.TextTransparency = 0.55 - 0.45 * math.cos(elapsed * 7)
             return bind.Listening
@@ -1872,7 +1698,7 @@ function UI.Keybind(line, default, onPress)
         end
     end)
     paint()
-
+    -- Saved as "KeyCode.E" / "UserInputType.MouseButton2", or false when unbound.
     bind.Flag = register(line.Parent, `{line.Name}/key`, nil, function()
         return bind.Value and `{bind.Value.EnumType}.{bind.Value.Name}` or false
     end, function(data)
@@ -1885,12 +1711,17 @@ function UI.Keybind(line, default, onPress)
     return bind
 end
 
+-- A labelled row with just a keybind box on the right (not tied to a toggle). Returns the keybind.
 function UI.KeybindRow(parent, text, default, onPress)
     local line = row(parent, text)
     UI.Label(line, text, { Position = UDim2.fromOffset(1, 0), Size = UDim2.new(1, -2, 1, 0) }, { Outline = true })
     return UI.Keybind(line, default, onPress)
 end
 
+--// List \\--
+-- A box of text options. Hovering an option slides its text right; the selected option turns the accent
+-- color. options: Values, Default, Multi. Returns { Value, Set(value), SetValues(values) }.
+-- The title sits tight above the box (and 1px higher than other titles), so lists start high in a groupbox.
 function UI.List(parent, text, options, callback)
     options = options or {}
     local values, multi = options.Values or {}, options.Multi
@@ -1928,6 +1759,7 @@ function UI.List(parent, text, options, callback)
     end
     table.insert(UI.Refreshers, paint)
 
+    -- (Re)builds the option rows and resizes the box to fit them (at least one row tall).
     function list:SetValues(newValues)
         values = newValues
         for _, entry in entries do
@@ -1976,6 +1808,8 @@ function UI.List(parent, text, options, callback)
         paint()
     end
 
+    -- Fits the box to its options; with options.Fill it also stretches down to the bottom of the page (less
+    -- the page and groupbox padding and their borders), so a lone list fills its column.
     function list:Resize()
         local boxHeight = math.max(#values, 1) * optionHeight + 4
         local page = options.Fill and line:FindFirstAncestorOfClass("ScrollingFrame")
@@ -1991,12 +1825,12 @@ function UI.List(parent, text, options, callback)
         local function refit()
             task.defer(list.Resize, list)
         end
+        connect(box:GetPropertyChangedSignal("AbsolutePosition"), refit)
         connect(line.AncestryChanged, refit)
         task.defer(function()
             local page = line:FindFirstAncestorOfClass("ScrollingFrame")
             if page then
                 connect(page:GetPropertyChangedSignal("AbsoluteSize"), refit)
-                connect(page:GetPropertyChangedSignal("CanvasPosition"), refit)
             end
             list:Resize()
         end)
@@ -2030,6 +1864,12 @@ function UI.List(parent, text, options, callback)
     return list
 end
 
+--// Textbox \\--
+-- A labelled text field. The real TextBox text is invisible; each character is drawn as its own label (the
+-- font is monospaced, so they sit on a fixed grid). Typed characters fade in while rolling down into place,
+-- deleted ones roll down and fade out, and the rest slide to their new spots. A blinking caret replaces the
+-- built-in one, and the text scrolls to keep the caret in view.
+-- options: Placeholder, Default, Save. Returns { Value, Set(text), Box }.
 function UI.Textbox(parent, text, options, callback)
     options = options or {}
     local labelHeight, fieldHeight = text and Config.TextSize + 4 or 0, Config.TextSize + 6
@@ -2046,7 +1886,8 @@ function UI.Textbox(parent, text, options, callback)
         FontFace = UI.Font,
         TextSize = Config.TextSize,
         Text = "",
-
+        -- Hidden: the characters are drawn separately. Its own cursor is drawn in TextColor3 regardless of
+        -- TextTransparency, so that matches the background too.
         TextTransparency = 1,
         PlaceholderText = "",
         TextXAlignment = Enum.TextXAlignment.Left,
@@ -2054,11 +1895,11 @@ function UI.Textbox(parent, text, options, callback)
         Parent = line,
     })
     create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), Parent = field })
-    theme(field, "BackgroundColor3", "Inline")
+    shade(field, 0.6, 1)
     outlined(field, "Shadow")
 
     local display = create("Frame", { Name = "Display", BackgroundTransparency = 1, ClipsDescendants = true, Size = UDim2.fromScale(1, 1), Parent = field })
-
+    -- The placeholder sits under the strip of characters and caret.
     local placeholder = UI.Label(display, options.Placeholder or "", { Size = UDim2.fromScale(1, 1), ZIndex = 1 }, { Slot = "SubText", Outline = true })
     local strip = create("Frame", { Name = "Strip", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 5, Parent = display })
     local caret = create("Frame", {
@@ -2102,7 +1943,7 @@ function UI.Textbox(parent, text, options, callback)
         local scroll = math.min(0, display.AbsoluteSize.X - x - 2)
         TweenService:Create(strip, roll, { Position = UDim2.fromOffset(scroll, 0) }):Play()
     end
-
+    -- Diffs the shown text against the new text: only the changed middle part animates in or out.
     local function sync(newText)
         local old = shown
         local prefix = 0
@@ -2182,13 +2023,16 @@ function UI.Textbox(parent, text, options, callback)
     return textbox
 end
 
+--// Button \\--
+-- A raised button. button:Add(text, callback) puts another one beside it; buttons on a row share the width
+-- equally. A click flashes the label accent. Returns { Add, Buttons }.
 function UI.Button(parent, text, callback)
     local height = Config.TextSize + 6
     local line = row(parent, text, height)
     line:SetAttribute("Bottom", height + 1)
     local group = { Buttons = {} }
     local function layout()
-
+        -- Equal widths across the row (less a 1px margin each side and the gaps between them).
         local count, gap = #group.Buttons, 4
         local shrink = (2 + gap * (count - 1)) / count
         for i, entry in group.Buttons do
@@ -2240,6 +2084,8 @@ function UI.Button(parent, text, callback)
     return group
 end
 
+-- A bordered window: accent line along the top, a sunken page area and a sunken tab bar along the bottom.
+-- Drag it by any empty part of the window or page area. window:Tab(name) adds a tab and returns its page.
 function UI.Window(size)
     size = size or UDim2.fromOffset(450, 500)
     local margin, gap, tabHeight = 6, 6, Config.TextSize + 14
@@ -2248,7 +2094,6 @@ function UI.Window(size)
         Size = size,
         Position = UDim2.new(0.5, -size.X.Offset / 2, 0.5, -size.Y.Offset / 2),
         BorderSizePixel = 0,
-        Active = true,
         Parent = UI.Gui,
     })
     theme(frame, "BackgroundColor3", "Background")
@@ -2256,17 +2101,7 @@ function UI.Window(size)
     addBorder(frame)
     registerPosition("__window", frame)
     local accent = 1
-    local accentBar = create("Frame", { Name = "Accent", Size = UDim2.new(1, 0, 0, accent), BorderSizePixel = 0, ZIndex = 4, Parent = frame })
-    theme(accentBar, "BackgroundColor3", "Accent")
-    local grab = create("TextButton", {
-        Name = "Grab",
-        Text = "",
-        AutoButtonColor = false,
-        BackgroundTransparency = 1,
-        Size = UDim2.new(1, 0, 0, margin + accent + 4),
-        ZIndex = 5,
-        Parent = frame,
-    })
+    theme(create("Frame", { Name = "Accent", Size = UDim2.new(1, 0, 0, accent), BorderSizePixel = 0, ZIndex = 4, Parent = frame }), "BackgroundColor3", "Accent")
 
     local pages = create("Frame", {
         Name = "Pages",
@@ -2288,7 +2123,8 @@ function UI.Window(size)
     })
     theme(tabBar, "BackgroundColor3", "Inline")
     inset(tabBar)
-
+    -- The selected tab is one raised piece (with the accent line on row 1, just inside the bar's rim) that
+    -- slides between tabs; the rim covers the bar's outer columns, so the line never reaches its corners.
     local selection = create("Frame", { Name = "Selection", BorderSizePixel = 0, ZIndex = 1, Parent = tabBar })
     theme(selection, "BackgroundColor3", "Background")
     shade(selection, 1.1, 0.85)
@@ -2299,6 +2135,7 @@ function UI.Window(size)
     local window = { Frame = frame, Pages = pages, TabBar = tabBar, Selection = selection, Tabs = {}, Selected = nil }
     local slide
 
+    -- Tab text colors depend on selection/hover, so they're re-applied here (also after SetColor).
     local function refresh()
         for _, tab in window.Tabs do
             local selected = tab == window.Selected
@@ -2314,6 +2151,8 @@ function UI.Window(size)
         return UDim2.fromOffset(tab and tab.X or 0, 0), UDim2.new(0, tab and tab.Width or 0, 1, 0)
     end
 
+    -- Equal gaps between tab names: the same whole-pixel gap between every pair of labels (and half of it at
+    -- each end), so every label sits on the pixel grid. Buttons split the space halfway between labels.
     local function layoutTabs()
         local total, count = tabList.AbsoluteSize.X, #window.Tabs
         if count == 0 or total <= 0 then return end
@@ -2361,6 +2200,8 @@ function UI.Window(size)
         end
     end
 
+    -- Returns the tab's page: page:Groupbox(name, side) adds a groupbox to its "left" or "right" column.
+    -- options.Pinned keeps the tab last (used for settings).
     function window:Tab(name, options)
         local button = create("TextButton", {
             Name = name,
@@ -2384,7 +2225,7 @@ function UI.Window(size)
             Parent = pages,
         })
         theme(scroller, "ScrollBarImageColor3", "Accent")
-
+        -- Columns sit in an inset holder: scale sizes inside a ScrollingFrame ignore its UIPadding.
         create("UIPadding", { PaddingBottom = UDim.new(0, Config.Spacing), Parent = scroller })
         local holder = create("Frame", {
             Name = "Columns",
@@ -2420,7 +2261,8 @@ function UI.Window(size)
             Page = scroller,
             Pinned = options and options.Pinned,
         }
-
+        -- Pinned tabs (settings) stay at the end; new tabs go in front of them. The first unpinned tab
+        -- added becomes the selected one.
         local index = #window.Tabs + 1
         if not tab.Pinned then
             for i, other in window.Tabs do
@@ -2453,12 +2295,12 @@ function UI.Window(size)
         return page
     end
 
-    UI.WindowDraggable(frame)
-    UI.Draggable(frame, grab)
-    UI.Draggable(frame, tabBar)
+    UI.Draggable(frame, frame)
+    UI.Draggable(frame, pages)
     return window
 end
 
+--// API \\--
 function UI.SetColor(slot, color)
     Config.Theme[slot] = color
     for _, entry in Themed do
@@ -2478,36 +2320,11 @@ function UI.Unload()
         end)
     end
     table.clear(Connections)
-    local keepGone = UI.Gui
-    if keepGone then
+    if UI.Gui then
         pcall(function()
-            keepGone:Destroy()
+            UI.Gui:Destroy()
         end)
     end
-    local parents = { GuiParent }
-    local lp = LocalPlayer
-    if lp then
-        local pg = lp:FindFirstChildOfClass("PlayerGui")
-        if pg then
-            parents[#parents + 1] = pg
-        end
-    end
-    if typeof(gethui) == "function" then
-        local okHui, host = pcall(gethui)
-        if okHui and typeof(host) == "Instance" then
-            parents[#parents + 1] = host
-        end
-    end
-    for _, parent in parents do
-        if typeof(parent) == "Instance" then
-            for _, child in parent:GetChildren() do
-                if child.Name == "Tapology" and child:IsA("ScreenGui") then
-                    pcall(child.Destroy, child)
-                end
-            end
-        end
-    end
-    UI.Gui = nil
     if env.Tapology == UI then
         env.Tapology = nil
     end
@@ -2516,13 +2333,15 @@ function UI.Unload()
     end
 end
 
+--// Main \\--
+-- gethui() can return a ScreenGui itself (RobloxGui); a ScreenGui only renders under a non-GUI container.
 local hui = gethui and gethui()
 do
     local parent = GuiParent
     if hui and typeof(hui) == "Instance" and not hui:IsA("LayerCollector") then
         parent = hui
     elseif gethui then
-
+        -- Some executors want gethui() even when it is a LayerCollector folder-like host.
         local okHui, host = pcall(gethui)
         if okHui and typeof(host) == "Instance" and not host:IsA("LayerCollector") then
             parent = host
@@ -2549,6 +2368,9 @@ do
     end
 end
 
+-- Splash, before the menu builds: a small window opens sideways from the center of the screen reading
+-- "are you ready to tap?" ("tap?" in accent), then narrows to fit "tapology.pro" (".pro" in accent) while
+-- the text crossfades, and after Config.SplashTime the whole thing fades out.
 do
     local border = 0
     for _, ring in Config.Border do
@@ -2566,7 +2388,6 @@ do
         return count * charWidth() + 1 + 28
     end
     local started = os.clock()
-    print("[Tapology] Loading UI...")
     local canvas = create("CanvasGroup", {
         Name = "Splash",
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -2585,10 +2406,11 @@ do
     theme(panel, "BackgroundColor3", "Background")
     shade(panel, 1, 0.86)
     addBorder(panel)
-
+    -- The border rings sit outside the panel, so the text is clipped by an inner frame instead.
     local clip = create("Frame", { Name = "Clip", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ClipsDescendants = true, Parent = panel })
     theme(create("Frame", { Name = "Accent", Size = UDim2.new(1, 0, 0, 1), BorderSizePixel = 0, Parent = clip }), "BackgroundColor3", "Accent")
 
+    -- A centered line of bold text made of { text, theme slot } parts.
     local function phrase(parts, transparency)
         local holder = create("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = clip })
         create("UIListLayout", {
@@ -2641,10 +2463,11 @@ do
 
     play(canvas, quart(0.35), { GroupTransparency = 1 }).Completed:Wait()
     canvas:Destroy()
-    print("[Tapology] Loaded UI")
 end
 
-local window = UI.Window(UDim2.fromOffset(505, 660))
+-- The library always has the settings tab (pinned last), the watermark and the hotkeys overlay; scripts add
+-- their own tabs in front of settings with UI:Tab(name).
+local window = UI.Window(UDim2.fromOffset(450, 530))
 UI.Main = window
 UI.Pages = {}
 UI.Groups = {}
@@ -2652,12 +2475,16 @@ UI.Pages.settings = window:Tab("settings", { Pinned = true })
 UI.Groups.configs = UI.Pages.settings:Groupbox("configs", "left")
 UI.Groups.config = UI.Pages.settings:Groupbox("config", "right")
 
+-- Adds a tab (in front of settings) and returns its page; page:Groupbox(title, "left" | "right").
 function UI:Tab(name)
     local page = window:Tab(name)
     UI.Pages[name] = page
     return page
 end
 
+--// Overlays \\--
+-- A small draggable panel styled like the window (border rings, accent line) that sizes itself to its
+-- content. Its position is saved in configs.
 local function overlay(name, position, anchor)
     local frame = create("Frame", {
         Name = name,
@@ -2670,7 +2497,8 @@ local function overlay(name, position, anchor)
     shade(frame, 1, 0.86)
     addBorder(frame)
     theme(create("Frame", { Name = "Accent", Size = UDim2.new(1, 0, 0, 1), BorderSizePixel = 0, ZIndex = 4, Parent = frame }), "BackgroundColor3", "Accent")
-
+    -- Content sits in a clipping frame so nothing spills out while the panel tweens to a new size (the
+    -- border rings stay outside it).
     local clip = create("Frame", { Name = "Clip", BackgroundTransparency = 1, ClipsDescendants = true, Size = UDim2.fromScale(1, 1), Parent = frame })
     local content = create("Frame", {
         Name = "Content",
@@ -2686,7 +2514,7 @@ local function overlay(name, position, anchor)
         PaddingBottom = UDim.new(0, 4),
         Parent = content,
     })
-
+    -- The panel tweens to its content's size (its border rings are scale-sized, so it can't auto-size).
     local resize = TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
     local function fit(instant)
         local goal = UDim2.fromOffset(content.AbsoluteSize.X, content.AbsoluteSize.Y)
@@ -2703,6 +2531,7 @@ local function overlay(name, position, anchor)
     return frame, content
 end
 
+-- nudge: pixels to shift the text down (padding top by twice it, since the text is vertically centered).
 local function autoLabel(parent, text, slot, order, bold, nudge)
     local label = UI.Label(parent, text, {
         Size = UDim2.fromOffset(0, Config.TextSize + 4),
@@ -2715,6 +2544,9 @@ local function autoLabel(parent, text, slot, order, bold, nudge)
     return label
 end
 
+-- Watermark: brand first ("tapology" in text color, ".pro" in accent), then the chosen info in grey,
+-- separated by evenly spaced divider lines. Starts at the very top right of the screen.
+-- (Placed so its border, Config.Border thick, just clears the screen edge.)
 local watermark, watermarkContent = overlay("Watermark", UDim2.new(1, -8, 0, 8), Vector2.new(1, 0))
 create("UIListLayout", {
     FillDirection = Enum.FillDirection.Horizontal,
@@ -2726,7 +2558,7 @@ autoLabel(watermarkContent, "tapology", "Text", 1, true, 1)
 autoLabel(watermarkContent, ".pro", "Accent", 2, true, 1)
 UI.Watermark = watermark
 
-local WatermarkInfo = { "fps", "time", "game", "ram", "cpu usage" }
+local WatermarkInfo = { "fps", "time", "game", "tick", "cpu usage" }
 local watermarkItems = {}
 local gameName = "game"
 task.spawn(function()
@@ -2742,7 +2574,8 @@ local frames, fps = 0, 0
 connect(RunService.RenderStepped, function()
     frames += 1
 end)
-
+-- Roblox only exposes CPU time per frame; with an uncapped frame rate that's roughly the whole frame, so a
+-- percentage would always read ~100%. The frame time in ms is the meaningful number.
 local function cpuUsage()
     local ok, ms = pcall(function()
         return cloneref(game:GetService("Stats")).PerformanceStats.CPU:GetValue()
@@ -2759,20 +2592,15 @@ local function infoText(name)
         return os.date("%H:%M:%S")
     elseif name == "game" then
         return gameName
-    elseif name == "ram" then
-        local ok, mb = pcall(function()
-            return cloneref(game:GetService("Stats")):GetTotalMemoryUsageMb()
-        end)
-        if not ok then
-            return "ram n/a"
-        end
-        return string.format("ram %.0fmb", mb)
+    elseif name == "tick" then
+        return `tick {math.floor(tick())}`
     elseif name == "cpu usage" then
         return cpuUsage()
     end
     return name
 end
 
+-- (Re)builds the info items: a divider (10px gap, 1px line, 10px gap) before each one.
 function UI.SetWatermarkInfo(selected)
     for _, item in watermarkItems do
         item.Divider:Destroy()
@@ -2812,12 +2640,14 @@ task.spawn(function()
     end
 end)
 
+-- Hotkeys: every bound keybind with its key; bright (key in accent) while its toggle is on. Starts at the
+-- middle of the left edge.
 local hotkeys, hotkeysContent = overlay("Hotkeys", UDim2.new(0, 10, 0.5, 0), Vector2.new(0, 0.5))
 create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = hotkeysContent })
 autoLabel(hotkeysContent, "hotkeys", "Text", 0, true)
 UI.HotkeysOverlay = hotkeys
 local hotkeyRows = {}
-
+-- Rows are as wide as the widest "name  key" pair (at least the title), so the panel tweens to fit.
 local function refreshHotkeys()
     local shown = 0
     local width = #"hotkeys" * charWidth() + 1
@@ -2861,6 +2691,15 @@ task.spawn(function()
     end
 end)
 
+--// File format \\--
+-- Configs (.tap) and themes (.taptheme) are one line each:
+--
+--   tap2.9f3c01ab.bGVnaXQvYWltIGFzc2lzdC9lbmFibGVkPWJvb2w6dHJ1ZQpsZWdpdC9haW0gYXNzaXN0L2Zvdj1udW06MTIw...
+--
+-- a format tag (tap2 / tpt2), a checksum of the contents, then the contents base64-encoded. The contents
+-- are "flag=value" lines where each value is typed (bool/num/str/set/arr) so it reads back exactly, and
+-- characters that would break a line (% , = # [ ] and newlines) are percent-escaped. A file whose
+-- checksum doesn't match (edited or truncated) is rejected instead of half-loading.
 local HttpService = cloneref(game:GetService("HttpService"))
 local GameFolder = `{Config.Folder}/games/{Config.GameFolder}`
 local ConfigFolder = `{GameFolder}/configs`
@@ -2966,6 +2805,7 @@ local function base64Decode(data)
     return table.concat(out)
 end
 
+-- 32-bit FNV-1a, as 8 hex digits.
 local function checksum(text)
     local h = 2166136261
     for i = 1, #text do
@@ -2975,6 +2815,7 @@ local function checksum(text)
     return string.format("%08x", h)
 end
 
+-- { [key] = encoded value } -> "tag.checksum.base64"
 local function pack(tag, entries)
     local keys = {}
     for key in entries do
@@ -2989,6 +2830,7 @@ local function pack(tag, entries)
     return `{tag}.{checksum(body)}.{base64Encode(body)}`
 end
 
+-- "tag.checksum.base64" -> { [key] = encoded value }, or nil if the tag or checksum doesn't match.
 local function unpack(tag, text)
     local fileTag, sum, data = text:match("^%s*(%w+)%.(%x+)%.([%w%+/=]*)%s*$")
     if fileTag ~= tag then
@@ -3008,6 +2850,11 @@ local function unpack(tag, text)
     return entries
 end
 
+--// Configs \\--
+-- A config is every registered flag (all element values, keybinds, window and overlay positions) saved in
+-- tapology/games/<GameFolder>/configs/<name>.tap. Theme colors are separate (see Themes).
+
+-- makefolder each level of a "a/b/c" path.
 local function ensureFolder(path)
     local built = ""
     for part in path:gmatch("[^/]+") do
@@ -3022,6 +2869,7 @@ local function configPath(name)
     return `{ConfigFolder}/{name}.tap`
 end
 
+-- Names of the files in `folder` ending in `extension` (without it), sorted.
 local function listNames(folder, extension)
     local names = {}
     if isfolder(folder) then
@@ -3071,6 +2919,7 @@ function UI.LoadConfig(name)
     return true
 end
 
+-- Autoload: the name of a config / theme to load on startup, kept in a small text file.
 local AutoloadConfigFile = `{GameFolder}/autoload.txt`
 local AutoloadThemeFile = `{Config.Folder}/themes/autoload.txt`
 local function readAutoload(path)
@@ -3092,6 +2941,11 @@ function UI.DeleteConfig(name)
     end
 end
 
+--// Notifications \\--
+-- UI:Notify(text, duration?) slides a notification in at the bottom right; they stack upward (newest at
+-- the bottom), slide the others up as they come and go, and have the window's border. The accent bar along
+-- the top runs down over the notification's lifetime. Each is a CanvasGroup (padded by the
+-- border's thickness so the rings aren't clipped) so it can fade as a whole.
 local BorderWidth = 0
 for _, ring in Config.Border do
     BorderWidth += ring[2]
@@ -3135,7 +2989,7 @@ function UI:Notify(text, duration)
     theme(panel, "BackgroundColor3", "Background")
     shade(panel, 1, 0.86)
     addBorder(panel)
-
+    -- The top accent bar doubles as the timer: it runs down from full width over the duration.
     local timer = create("Frame", { Name = "Accent", Size = UDim2.new(1, 0, 0, 1), BorderSizePixel = 0, Parent = panel })
     theme(timer, "BackgroundColor3", "Accent")
     UI.Label(panel, text, { Position = UDim2.fromOffset(9, 1), Size = UDim2.new(1, -18, 1, -1) }, { Outline = true })
@@ -3160,6 +3014,7 @@ function UI:Notify(text, duration)
     end)
 end
 
+--// Settings tab \\--
 local configList = UI.Groups.configs:List(nil, { Values = UI.ListConfigs(), Save = false, Fill = true })
 local configGroup = UI.Groups.config
 local manage = configGroup:Subtab("config")
@@ -3184,7 +3039,7 @@ local function chosenName()
     end
     return name
 end
-
+-- Picking a config fills in the name box.
 local configListSet = configList.Set
 function configList:Set(value)
     configListSet(self, value)
@@ -3193,6 +3048,7 @@ function configList:Set(value)
     end
 end
 
+-- A full-width create button over save | load and delete | refresh.
 manage:Button("create", function()
     local name = chosenName()
     if name == "" then return report("enter a config name") end
@@ -3236,10 +3092,13 @@ end):Add("rem autoload", function()
     report(name and `config '{name}' won't autoload` or "no config is set to autoload")
 end)
 
+-- The menu key (Config.MenuKey, right control by default) shows/hides the window; it's saved in configs.
 UI.MenuKey = manage:Keybind("menu key", Config.MenuKey, function()
     UI:ToggleMenu()
 end)
 
+-- UI:ToggleMenu(visible?) shows/hides the window (flips it when visible is nil); hiding it also closes any
+-- open dropdown, color picker or config window.
 local menuCursorConn
 local function setMenuCursorFree(on)
     if menuCursorConn then
@@ -3387,6 +3246,10 @@ themeTab:Toggle("hotkeys", true, function(on)
     hotkeys.Visible = on
 end)
 
+--// Themes \\--
+-- Themes are separate from configs: just the theme colors, saved in tapology/themes/<name>.taptheme in the
+-- same one-line format as configs (tag tpt2, "slot=#hex" entries). The theme pickers aren't config flags,
+-- so loading a config never changes the theme.
 local ThemeFolder = `{Config.Folder}/themes`
 local ThemeSlots = { "Accent", "Background", "Inline", "Outline", "Shadow", "Highlight", "Text", "SubText", "TextOutline" }
 local themePickers = {}
@@ -3436,6 +3299,7 @@ function UI.DeleteTheme(name)
     end
 end
 
+-- Saved themes are picked from a dropdown; picking one fills in the name box.
 local themeName
 local themeList = themeTab:Dropdown("themes", { Values = UI.ListThemes(), Save = false })
 themeName = themeTab:Textbox("theme name", { Placeholder = "name", Save = false })
@@ -3457,7 +3321,7 @@ local function refreshThemes()
     themeList:SetValues(UI.ListThemes())
     themeList:Set(themeList.Value)
 end
-
+-- A full-width create button over save | load and delete | refresh, same as configs.
 themeTab:Button("create", function()
     local name = chosenTheme()
     if name == "" then return report("enter a theme name") end
@@ -3502,11 +3366,11 @@ end):Add("rem autoload", function()
 end)
 
 env.Tapology = UI
-env.Library = UI
-getgenv().Tapology = UI
-getgenv().Library = UI
 UI:Notify(`tapology.pro - {keyName(Config.MenuKey)} toggles the menu`, 5)
 
+-- Autoload once the script using the library is fully built: after it has added a tab of its own and no
+-- new element has been added for a second (so its flags exist), load the autoload theme and config. If no
+-- tab ever arrives (a library-only setup), it loads after Config.AutoloadTimeout seconds anyway.
 task.spawn(function()
     local started = os.clock()
     repeat
@@ -3526,3 +3390,4 @@ task.spawn(function()
     end
 end)
 return UI
+
