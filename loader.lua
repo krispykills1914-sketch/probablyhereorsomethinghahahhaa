@@ -1,3 +1,7 @@
+local BootStart = os.clock()
+getgenv()._TapologyBootStart = BootStart
+print("[Tapology] Loading...")
+
 local ModuleUrls = {
     library = "https://raw.githubusercontent.com/krispykills1914-sketch/probablyhereorsomethinghahahhaa/main/library.lua",
     weather = "https://raw.githubusercontent.com/krispykills1914-sketch/probablyhereorsomethinghahahhaa/main/weather.lua",
@@ -5,6 +9,8 @@ local ModuleUrls = {
     killeffect = "https://raw.githubusercontent.com/krispykills1914-sketch/probablyhereorsomethinghahahhaa/main/killeffect.lua",
     tracer = "https://raw.githubusercontent.com/krispykills1914-sketch/probablyhereorsomethinghahahhaa/main/tracer.lua",
 }
+
+local OOVArrowAsset = "rbxassetid://132789080271579"
 
 local function patchLibrary(src)
     src = src:gsub("\r\n", "\n")
@@ -110,16 +116,31 @@ end]=]) then
     if swap('                connect(page:GetPropertyChangedSignal("AbsoluteSize"), refit)\n', '                connect(page:GetPropertyChangedSignal("AbsoluteSize"), refit)\n                connect(page:GetPropertyChangedSignal("CanvasPosition"), refit)\n') then
         hits[#hits + 1] = "scroll"
     end
+    if not string.find(src, 'local hasLabel = type(text) == "string"', 1, true) then
+        if swap(
+            "function UI.Dropdown(parent, text, options, callback)\n    options = options or {}\n    local values, multi = options.Values or {}, options.Multi\n",
+            "function UI.Dropdown(parent, text, options, callback)\n    options = options or {}\n    local values, multi = options.Values or {}, options.Multi\n    local hasLabel = type(text) == \"string\" and text ~= \"\"\n    if not hasLabel then\n        text = \"Dropdown\"\n    end\n"
+        ) then
+            hits[#hits + 1] = "droplabel"
+        end
+    end
     getgenv()._TapologyLibraryPatch = table.concat(hits, ",")
     return src
 end
 
-local ModuleRoot = "c:/Users/1223/Downloads/roblox resources/Tapology Resources/Visuals/modules"
+local ModuleRoots = {
+    "tapology/modules",
+    "tapology\\modules",
+    "modules",
+    "c:/Users/1223/Downloads/roblox resources/Tapology Resources/Visuals/modules",
+    "C:/Users/1223/Downloads/roblox resources/Tapology Resources/Visuals/modules",
+    [[C:\Users\1223\Downloads\roblox resources\Tapology Resources\Visuals\modules]],
+}
 
 local function moduleAlreadyLoaded(name)
     if name == "library" then
         local ui = getgenv().Tapology or getgenv().Library
-        return type(ui) == "table" and type(ui.Unload) == "function" and ui.Gui ~= nil
+        return type(ui) == "table" and type(ui.Unload) == "function" and ui.Gui ~= nil and type(ui.WindowDraggable) == "function"
     elseif name == "weather" then
         return type(getgenv().Weather) == "table" and type(getgenv().Weather.SetMode) == "function"
     elseif name == "hiteffect" then
@@ -128,45 +149,135 @@ local function moduleAlreadyLoaded(name)
         return type(getgenv().KillEffects) == "table"
     elseif name == "tracer" then
         return type(getgenv().Tracers) == "table"
+    elseif name == "rage" then
+        local rage = getgenv().Rage
+        return type(rage) == "table"
+            and type(rage.SetEnabled) == "function"
+            and type(rage.Config) == "table"
+            and rage.Config.FirePositionScanning ~= nil
+            and type(rage.Runtime) == "table"
     end
     return false
 end
 
-local function loadRemote(name)
-    if getgenv()._TapologyUseLocalModules and moduleAlreadyLoaded(name) then
-        getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
-        getgenv()._TapologyModuleSource[name] = "local"
-        return
+local function readLocalModule(name)
+    if type(readfile) ~= "function" then
+        return nil
     end
-    local src
-    local localPath = `{ModuleRoot}/{name}.lua`
-    if type(readfile) == "function" then
-        local okLocal, data = pcall(readfile, localPath)
-        if okLocal and type(data) == "string" and #data > 20 then
-            src = data
-            getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
-            getgenv()._TapologyModuleSource[name] = "local"
+    local names = { name }
+    if name == "rage" then
+        table.insert(names, "ragebot")
+    end
+    local paths = {}
+    for _, root in ModuleRoots do
+        for _, fileName in names do
+            table.insert(paths, `{root}/{fileName}.lua`)
+            table.insert(paths, `{root}\\{fileName}.lua`)
         end
     end
-    if not src then
+    -- Also allow ragebot.lua beside modules/.
+    if name == "rage" then
+        table.insert(paths, "c:/Users/1223/Downloads/roblox resources/Tapology Resources/Visuals/ragebot.lua")
+        table.insert(paths, [[C:\Users\1223\Downloads\roblox resources\Tapology Resources\Visuals\ragebot.lua]])
+    end
+    for _, path in paths do
+        local okLocal, data = pcall(readfile, path)
+        if okLocal and type(data) == "string" and #data > 200 then
+            return data, path
+        end
+    end
+    return nil
+end
+
+getgenv()._TapologyForceLocalModules = true
+getgenv()._TapologyUseLocalModules = true
+
+local function ensureExecutorWorkspace()
+    if type(makefolder) == "function" then
+        pcall(makefolder, "tapology")
+        pcall(makefolder, "tapology/modules")
+    end
+    local pre = getgenv()._TapologyPreloadModules
+    if type(pre) ~= "table" or type(writefile) ~= "function" then
+        return
+    end
+    for name, src in pre do
+        if type(name) == "string" and type(src) == "string" and #src > 200 then
+            local path = "tapology/modules/" .. name .. ".lua"
+            local needWrite = true
+            if type(isfile) == "function" then
+                local okFile, exists = pcall(isfile, path)
+                if okFile and exists and type(readfile) == "function" then
+                    local okRead, current = pcall(readfile, path)
+                    if okRead and type(current) == "string" and #current == #src then
+                        needWrite = false
+                    end
+                end
+            end
+            if needWrite then
+                pcall(writefile, path, src)
+            end
+        end
+    end
+end
+
+local function loadRemote(name)
+    local forceLocal = getgenv()._TapologyForceLocalModules ~= false
+    if forceLocal and moduleAlreadyLoaded(name) then
+        getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
+        getgenv()._TapologyModuleSource[name] = "local"
+        print("[Tapology] Loaded module:", name)
+        return
+    end
+    ensureExecutorWorkspace()
+    local src
+    local data, localPath = readLocalModule(name)
+    if (not data or #data < 200) and type(getgenv()._TapologyPreloadModules) == "table" then
+        local pre = getgenv()._TapologyPreloadModules[name]
+        if type(pre) == "string" and #pre > 200 then
+            data, localPath = pre, "preload:" .. name
+            if type(writefile) == "function" then
+                pcall(writefile, "tapology/modules/" .. name .. ".lua", pre)
+            end
+        end
+    end
+    if data and #data > 200 then
+        src = data
+        getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
+        getgenv()._TapologyModuleSource[name] = "local"
+        getgenv()._TapologyModulePath = getgenv()._TapologyModulePath or {}
+        getgenv()._TapologyModulePath[name] = localPath
+    end
+    if not src and not forceLocal then
         local url = ModuleUrls[name]
         if type(url) ~= "string" or url:find("YOUR_HOST", 1, true) then
             warn("[Tapology]", name, "url is not set")
             return
         end
-        local ok, data = pcall(function()
-            return game:HttpGet(url)
+        local bust = tostring(math.floor(os.clock() * 1000))
+        local fetchUrl = url .. (string.find(url, "?", 1, true) and "&" or "?") .. "t=" .. bust
+        local ok, remote = pcall(function()
+            return game:HttpGet(fetchUrl)
         end)
-        if not ok or type(data) ~= "string" or #data < 20 then
-            warn("[Tapology]", name, "download failed:", data)
+        if (not ok or type(remote) ~= "string" or #remote < 20) and fetchUrl ~= url then
+            ok, remote = pcall(function()
+                return game:HttpGet(url)
+            end)
+        end
+        if not ok or type(remote) ~= "string" or #remote < 20 then
+            warn("[Tapology]", name, "download failed:", remote)
             return
         end
-        src = data
+        src = remote
         getgenv()._TapologyModuleSource = getgenv()._TapologyModuleSource or {}
         getgenv()._TapologyModuleSource[name] = "remote"
         if name == "library" then
             src = patchLibrary(src)
         end
+    end
+    if not src then
+        warn("[Tapology]", name, "local module missing")
+        return
     end
     local fn, err = loadstring(src, "@" .. name)
     if not fn then
@@ -176,6 +287,8 @@ local function loadRemote(name)
     local ran, result = pcall(fn)
     if not ran then
         warn("[Tapology]", name, "failed:", result)
+    else
+        print("[Tapology] Loaded module:", name)
     end
 end
 
@@ -184,14 +297,56 @@ do
     if type(prevServer) == "table" and type(prevServer.Stop) == "function" then
         pcall(prevServer.Stop)
     end
-    for _, key in { "Tapology", "Library" } do
-        local stub = getgenv()[key]
-        if type(stub) ~= "table" or type(stub.Unload) ~= "function" then
+    local function purgeTapologyGuis(keep)
+        local players = game:GetService("Players")
+        local localPlayer = players.LocalPlayer
+        local parents = {
+            game:GetService("CoreGui"),
+            localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui"),
+        }
+        if typeof(gethui) == "function" then
+            local okHui, host = pcall(gethui)
+            if okHui and typeof(host) == "Instance" then
+                parents[#parents + 1] = host
+            end
+        end
+        for _, parent in parents do
+            if typeof(parent) == "Instance" then
+                for _, child in parent:GetChildren() do
+                    if child.Name == "Tapology" and child:IsA("ScreenGui") and child ~= keep then
+                        pcall(child.Destroy, child)
+                    end
+                end
+            end
+        end
+    end
+    getgenv()._TapologyPurgeGuis = purgeTapologyGuis
+    local ui = getgenv().Tapology or getgenv().Library
+    local keepLibrary = type(ui) == "table"
+        and type(ui.Unload) == "function"
+        and ui.Gui ~= nil
+        and type(ui.PolishOverlay) == "function"
+    if keepLibrary then
+        purgeTapologyGuis(ui.Gui)
+    else
+        for _, key in { "Tapology", "Library" } do
+            local stub = getgenv()[key]
+            if type(stub) == "table" and type(stub.Unload) == "function" then
+                pcall(stub.Unload)
+            end
             getgenv()[key] = nil
         end
+        purgeTapologyGuis(nil)
     end
 end
 loadRemote("library")
+do
+    local ui = getgenv().Tapology or getgenv().Library
+    local purge = getgenv()._TapologyPurgeGuis
+    if type(purge) == "function" then
+        purge(ui and ui.Gui)
+    end
+end
 local Library = getgenv().Library or getgenv().Tapology
 do
 
@@ -239,6 +394,8 @@ local Config = {
     OOVRadius = 180,
     OOVSize = 16,
     OOVColor = Color3.fromRGB(255, 255, 255),
+    OOVTransparency = 0,
+    OOVImage = OOVArrowAsset,
     ChamsMode = "highlight",
     AdornmentType = "solid",
     AdornmentGlow = 1,
@@ -543,40 +700,105 @@ local function phantomWeapon(name, model)
     return lastWeapon[name]
 end
 
+local function replicationPosition(entry)
+    if type(entry) ~= "table" then
+        return
+    end
+    local class = Replication.Class
+    if class and type(class.getPosition) == "function" then
+        local ok, pos = pcall(class.getPosition, entry)
+        if ok and typeof(pos) == "Vector3" and pos.Magnitude > 1 then
+            return pos
+        end
+    end
+    local smooth = rawget(entry, "_smoothPosition")
+    if type(smooth) == "table" then
+        local v = rawget(smooth, "_value1") or rawget(smooth, "_value0")
+        if typeof(v) == "Vector3" and v.Magnitude > 1 then
+            return v
+        end
+    end
+    local spring = rawget(entry, "_posspring")
+    if type(spring) == "table" then
+        local p = rawget(spring, "p") or rawget(spring, "_p0") or rawget(spring, "_p1")
+        if typeof(p) == "Vector3" and p.Magnitude > 1 then
+            return p
+        end
+    end
+end
+
 local function phantomTargets(list)
     local root = workspace:FindFirstChild("Players")
-    if not root then return end
-    for _, folder in root:GetChildren() do
-        for _, model in folder:GetChildren() do
-            local info = phantomModel(model)
-            local name = info and info.Label.Text
-            if name and name ~= "" and name ~= LocalPlayer.Name and not list[name] then
-                local player = Players:FindFirstChild(name)
-                local live = replicationOf(player)
-                local enemy
-                if live and live.Enemy ~= nil then
-                    enemy = live.Enemy or not Config.TeamCheck
-                else
-                    enemy = isEnemy(player)
-                end
-                if enemy and not (live and live.Alive == false) then
-                    list[name] = true
-                    local weapon = live and live.Weapon
-                    if weapon then
-                        lastWeapon[name] = weapon
+    if root then
+        for _, folder in root:GetChildren() do
+            for _, model in folder:GetChildren() do
+                local info = phantomModel(model)
+                local name = info and info.Label.Text
+                if name and name ~= "" and name ~= LocalPlayer.Name and not list[name] then
+                    local player = Players:FindFirstChild(name)
+                    local live = replicationOf(player)
+                    local enemy
+                    if live and live.Enemy ~= nil then
+                        enemy = live.Enemy or not Config.TeamCheck
+                    else
+                        enemy = isEnemy(player)
                     end
-                    table.insert(list, {
-                        Key = name,
-                        Player = player,
-                        Name = displayName(player, name),
-                        Root = info.Root,
-                        Head = info.Tag.Parent,
-                        Model = model,
-                        Parts = info.Parts,
-                        Health = live and live.Health or phantomHealth(info.Tag),
-                        Weapon = weapon or phantomWeapon(name, model),
-                    })
+                    if enemy and not (live and live.Alive == false) then
+                        list[name] = true
+                        local weapon = live and live.Weapon
+                        if weapon then
+                            lastWeapon[name] = weapon
+                        end
+                        local entry = Replication.Entries and player and Replication.Entries[player]
+                        table.insert(list, {
+                            Key = name,
+                            Player = player,
+                            Name = displayName(player, name),
+                            Root = info.Root,
+                            World = info.Root and info.Root.Position or replicationPosition(entry),
+                            Head = info.Tag.Parent,
+                            Model = model,
+                            Parts = info.Parts,
+                            Health = live and live.Health or phantomHealth(info.Tag),
+                            Weapon = weapon or phantomWeapon(name, model),
+                        })
+                    end
                 end
+            end
+        end
+    end
+    local entries = Replication.Entries
+    if not entries then
+        pcall(findReplication)
+        entries = Replication.Entries
+    end
+    if type(entries) ~= "table" then
+        return
+    end
+    for player, entry in pairs(entries) do
+        if typeof(player) == "Instance" and player:IsA("Player") and player ~= LocalPlayer and not list[player.Name] then
+            local live = replicationOf(player)
+            local enemy
+            if live and live.Enemy ~= nil then
+                enemy = live.Enemy or not Config.TeamCheck
+            else
+                enemy = isEnemy(player)
+            end
+            local world = replicationPosition(entry)
+            if enemy and world and not (live and live.Alive == false) then
+                list[player.Name] = true
+                table.insert(list, {
+                    Key = player.Name,
+                    Player = player,
+                    Name = displayName(player, player.Name),
+                    Root = nil,
+                    World = world,
+                    Head = nil,
+                    Model = nil,
+                    Parts = {},
+                    Health = live and live.Health,
+                    Weapon = live and live.Weapon or lastWeapon[player.Name],
+                })
             end
         end
     end
@@ -676,8 +898,19 @@ local function removeHighlight(key)
     local adorns = Adornments[key]
     if adorns then
         Adornments[key] = nil
-        for _, inst in adorns do
-            inst:Destroy()
+        if adorns.Clones then
+            for _, inst in adorns.Clones do
+                inst:Destroy()
+            end
+            for _, inst in adorns.Glow or {} do
+                inst:Destroy()
+            end
+        else
+            for _, inst in adorns do
+                if typeof(inst) == "Instance" then
+                    inst:Destroy()
+                end
+            end
         end
     end
 end
@@ -703,57 +936,161 @@ local function adornLook(kind, glow)
     return always, transparency
 end
 
+local AdornFolder = Instance.new("Folder")
+AdornFolder.Name = "TapologyAdornments"
+AdornFolder.Parent = workspace.CurrentCamera or workspace
+table.insert(Connections, workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    if workspace.CurrentCamera and AdornFolder.Parent ~= workspace.CurrentCamera then
+        AdornFolder.Parent = workspace.CurrentCamera
+    end
+end))
+
+local AdornMaxParts = 14
+local AdornUpdateHz = 20
+local function adornPartsFor(target)
+    local parts = {}
+    local seenPart = {}
+    local function push(part)
+        if part and part.Parent and part:IsA("BasePart") and not seenPart[part] and part.Transparency < 0.95 and part.Size.Magnitude > 0.05 then
+            seenPart[part] = true
+            parts[#parts + 1] = part
+        end
+    end
+    for _, part in target.Parts or {} do
+        push(part)
+    end
+    if target.Model and target.Model.Parent then
+        for _, desc in target.Model:GetDescendants() do
+            push(desc)
+        end
+    end
+    if #parts > AdornMaxParts then
+        table.sort(parts, function(a, b)
+            return a.Size.Magnitude > b.Size.Magnitude
+        end)
+        while #parts > AdornMaxParts do
+            parts[#parts] = nil
+        end
+    end
+    return parts
+end
+
+local function makeAdornClone(part)
+    local clone = Instance.new("Part")
+    clone.Name = "Adorn"
+    clone.Shape = part:IsA("Part") and part.Shape or Enum.PartType.Block
+    clone.Anchored = true
+    clone.CanCollide = false
+    clone.CanQuery = false
+    clone.CanTouch = false
+    clone.CastShadow = false
+    clone.Massless = true
+    clone.Material = Enum.Material.ForceField
+    if part:IsA("MeshPart") then
+        local mesh = Instance.new("SpecialMesh")
+        mesh.MeshType = Enum.MeshType.FileMesh
+        pcall(function()
+            mesh.MeshId = part.MeshId
+        end)
+        mesh.TextureId = ""
+        mesh.Scale = Vector3.new(1, 1, 1)
+        mesh.Parent = clone
+    else
+        local mesh = part:FindFirstChildOfClass("SpecialMesh")
+        if mesh then
+            local copy = mesh:Clone()
+            copy.TextureId = ""
+            copy.Parent = clone
+        end
+    end
+    clone.Parent = AdornFolder
+    return clone
+end
+
 local function applyAdornments(target, visible)
     local key = target.Key
     local list = Adornments[key]
     if not list then
-        list = {}
+        list = { Clones = {}, Glow = {}, Last = 0 }
         Adornments[key] = list
     end
-    local mode = visible and "HighlightVisible" or "HighlightOccluded"
-    local color = Config[mode .. "FillColor"]
-    local always, transparency = adornLook(Config.AdornmentType, Config.AdornmentGlow)
-    local kind = Config.AdornmentType
-    local wanted = 0
-    for _, part in target.Parts or {} do
-        if part and part.Parent and part:IsA("BasePart") and wanted < 14 then
-            wanted += 1
-            local box = list[wanted]
-            if not box then
-                box = Instance.new("BoxHandleAdornment")
-                box.Name = key
-                box.Parent = HighlightParent
-                list[wanted] = box
-                if kind == "glow 2x" then
-                    local outer = Instance.new("BoxHandleAdornment")
-                    outer.Name = key .. " glow"
-                    outer.Parent = HighlightParent
-                    list[wanted + 100] = outer
+    local now = os.clock()
+    local due = (now - (list.Last or 0)) >= (1 / AdornUpdateHz)
+    if not due and next(list.Clones) then
+        local kind = Config.AdornmentType
+        local plasmaT
+        if kind == "plasma" then
+            plasmaT = math.clamp(0.42 + math.sin(now * 6) * 0.18, 0, 0.95)
+        end
+        for part, clone in list.Clones do
+            if part.Parent and clone.Parent then
+                clone.CFrame = part.CFrame
+                if plasmaT then
+                    clone.Transparency = plasmaT
                 end
             end
-            box.Adornee = part
-            box.Size = part.Size
-            box.AlwaysOnTop = always
-            box.ZIndex = 2
-            box.Color3 = color
-            box.Transparency = transparency
-            box.Visible = true
-            local outer = list[wanted + 100]
-            if outer then
-                outer.Adornee = part
-                outer.Size = part.Size * 1.08
-                outer.AlwaysOnTop = true
-                outer.ZIndex = 1
-                outer.Color3 = color
-                outer.Transparency = math.clamp(transparency + 0.25, 0, 0.92)
-                outer.Visible = kind == "glow 2x"
+        end
+        for part, glow in list.Glow do
+            if part.Parent and glow.Parent then
+                glow.CFrame = part.CFrame
             end
         end
+        return
     end
-    for index, inst in list do
-        local slot = index > 100 and index - 100 or index
-        if slot > wanted and inst then
-            inst.Visible = false
+    list.Last = now
+    local mode = visible and "HighlightVisible" or "HighlightOccluded"
+    local color = Config[mode .. "FillColor"]
+    local fillAlpha = Config[mode .. "FillTransparency"]
+    local always, lookTransparency = adornLook(Config.AdornmentType, Config.AdornmentGlow)
+    local transparency = math.clamp(math.max(tonumber(fillAlpha) or 0, lookTransparency), 0, 0.95)
+    local kind = Config.AdornmentType
+    local material = Enum.Material.ForceField
+    if kind == "solid" then
+        material = Enum.Material.SmoothPlastic
+    elseif kind == "glow" or kind == "glow 2x" or kind == "plasma" then
+        material = Enum.Material.Neon
+    elseif kind == "shaded" or kind == "xray shaded" then
+        material = Enum.Material.ForceField
+    end
+    local parts = adornPartsFor(target)
+    local used = {}
+    for _, part in parts do
+        local clone = list.Clones[part]
+        if not clone or not clone.Parent then
+            clone = makeAdornClone(part)
+            list.Clones[part] = clone
+        end
+        used[part] = true
+        clone.CFrame = part.CFrame
+        clone.Size = part.Size
+        clone.Color = color
+        clone.Transparency = transparency
+        clone.Material = always and Enum.Material.ForceField or material
+        clone.LocalTransparencyModifier = 0
+        if kind == "glow 2x" then
+            local glow = list.Glow[part]
+            if not glow or not glow.Parent then
+                glow = makeAdornClone(part)
+                list.Glow[part] = glow
+            end
+            glow.CFrame = part.CFrame
+            glow.Size = part.Size * 1.06
+            glow.Color = color
+            glow.Transparency = math.clamp(transparency + 0.22, 0, 0.95)
+            glow.Material = Enum.Material.Neon
+        elseif list.Glow[part] then
+            list.Glow[part]:Destroy()
+            list.Glow[part] = nil
+        end
+    end
+    for part, clone in list.Clones do
+        if not used[part] then
+            clone:Destroy()
+            list.Clones[part] = nil
+            if list.Glow[part] then
+                list.Glow[part]:Destroy()
+                list.Glow[part] = nil
+            end
         end
     end
 end
@@ -800,9 +1137,12 @@ local function updateHighlight(target, rank, cameraPosition)
             applyAdornments(target, visible)
         else
             local adorns = Adornments[key]
-            if adorns then
-                for _, inst in adorns do
-                    inst.Visible = false
+            if adorns and adorns.Clones then
+                for _, inst in adorns.Clones do
+                    inst.Transparency = 1
+                end
+                for _, inst in adorns.Glow or {} do
+                    inst.Transparency = 1
                 end
             end
         end
@@ -811,8 +1151,19 @@ local function updateHighlight(target, rank, cameraPosition)
     local adorns = Adornments[key]
     if adorns then
         Adornments[key] = nil
-        for _, inst in adorns do
-            inst:Destroy()
+        if adorns.Clones then
+            for _, inst in adorns.Clones do
+                inst:Destroy()
+            end
+            for _, inst in adorns.Glow or {} do
+                inst:Destroy()
+            end
+        else
+            for _, inst in adorns do
+                if typeof(inst) == "Instance" then
+                    inst:Destroy()
+                end
+            end
         end
     end
     local mode, depth
@@ -918,18 +1269,31 @@ local function arrowFor(key)
     holder.Parent = Gui
     local function bar(rot, x)
         local piece = Instance.new("Frame")
+        piece.Name = "Arm"
         piece.AnchorPoint = Vector2.new(0.5, 0.5)
         piece.Position = UDim2.new(0.5, x, 0.5, 0)
         piece.Size = UDim2.fromOffset(3, 11)
         piece.Rotation = rot
         piece.BorderSizePixel = 0
+        piece.ZIndex = 6
         piece.Parent = holder
         local corner = Instance.new("UICorner")
         corner.CornerRadius = UDim.new(1, 0)
         corner.Parent = piece
         return piece
     end
-    arrow = { Holder = holder, A = bar(36, -3), B = bar(-36, 3) }
+    local image = Instance.new("ImageLabel")
+    image.Name = "Chevron"
+    image.BackgroundTransparency = 1
+    image.AnchorPoint = Vector2.new(0.5, 0.5)
+    image.Position = UDim2.fromScale(0.5, 0.5)
+    image.Size = UDim2.fromScale(1, 1)
+    image.Image = tostring(Config.OOVImage or OOVArrowAsset)
+    image.ScaleType = Enum.ScaleType.Fit
+    image.ImageColor3 = Config.OOVColor
+    image.ZIndex = 7
+    image.Parent = holder
+    arrow = { Holder = holder, Image = image, A = bar(36, -3), B = bar(-36, 3) }
     Arrows[key] = arrow
     return arrow
 end
@@ -958,32 +1322,68 @@ local function placeSnap(key, from, to)
     line.Stroke.Transparency = Config.SnaplineTransparency
 end
 
-local function placeArrow(key, camera, world, onScreen)
+local function placeArrow(key, camera, world)
     local arrow = arrowFor(key)
-    if not Config.OOV or onScreen then
+    if not Config.OOV or typeof(world) ~= "Vector3" then
         arrow.Holder.Visible = false
         return
     end
+    local vs = camera.ViewportSize
+    local center = Vector2.new(vs.X * 0.5, vs.Y * 0.5)
+    local size = math.clamp(tonumber(Config.OOVSize) or 16, 8, 40)
+    local pad = math.max(size * 0.5 + 4, 10)
     local screen = camera:WorldToViewportPoint(world)
-    local center = camera.ViewportSize * 0.5
-    local dir = Vector2.new(screen.X - center.X, screen.Y - center.Y)
-    if screen.Z <= 0 then
-        dir = -dir
+    local sx, sy, sz = screen.X, screen.Y, screen.Z
+    if sz <= 0 then
+        sx = center.X * 2 - sx
+        sy = center.Y * 2 - sy
     end
-    if dir.Magnitude < 1 then
-        dir = Vector2.new(0, -1)
-    else
-        dir = dir.Unit
+    local onScreen = sz > 0 and sx >= pad and sx <= vs.X - pad and sy >= pad and sy <= vs.Y - pad
+    if onScreen then
+        arrow.Holder.Visible = false
+        return
     end
-    local radius = math.clamp(tonumber(Config.OOVRadius) or 180, 40, 500)
-    local pos = center + dir * radius
-    local size = math.clamp(tonumber(Config.OOVSize) or 16, 8, 32)
+    local dx, dy = sx - center.X, sy - center.Y
+    if math.abs(dx) < 0.001 and math.abs(dy) < 0.001 then
+        dx, dy = 0, -1
+    end
+    local angle = math.atan2(dy, dx)
+    local maxRadius = math.max(48, math.min(center.X, center.Y, vs.X - center.X, vs.Y - center.Y) - pad)
+    local radius = math.clamp(tonumber(Config.OOVRadius) or 180, 40, maxRadius)
+    local pos = Vector2.new(center.X + math.cos(angle) * radius, center.Y + math.sin(angle) * radius)
+    pos = Vector2.new(math.clamp(pos.X, pad, vs.X - pad), math.clamp(pos.Y, pad, vs.Y - pad))
+    local color = Config.OOVColor or Color3.new(1, 1, 1)
+    local alpha = math.clamp(tonumber(Config.OOVTransparency) or 0, 0, 1)
     arrow.Holder.Visible = true
     arrow.Holder.Position = UDim2.fromOffset(pos.X, pos.Y)
     arrow.Holder.Size = UDim2.fromOffset(size, size)
-    arrow.Holder.Rotation = math.deg(math.atan2(dir.Y, dir.X))
-    arrow.A.BackgroundColor3 = Config.OOVColor
-    arrow.B.BackgroundColor3 = Config.OOVColor
+    arrow.Holder.Rotation = math.deg(angle)
+    if arrow.Image then
+        local id = tostring(Config.OOVImage or OOVArrowAsset)
+        if arrow.Image.Image ~= id then
+            arrow.Image.Image = id
+        end
+        arrow.Image.ImageColor3 = color
+        arrow.Image.ImageTransparency = alpha
+        arrow.Image.Rotation = 0
+        arrow.Image.Visible = true
+        if arrow.A then
+            arrow.A.Visible = arrow.Image.IsLoaded ~= true
+            arrow.B.Visible = arrow.Image.IsLoaded ~= true
+        end
+    end
+    if arrow.A then
+        arrow.A.BackgroundColor3 = color
+        arrow.B.BackgroundColor3 = color
+        arrow.A.BackgroundTransparency = alpha
+        arrow.B.BackgroundTransparency = alpha
+        local armH = math.max(7, math.floor(size * 0.62 + 0.5))
+        local armW = math.max(2, math.floor(size * 0.18 + 0.5))
+        arrow.A.Size = UDim2.fromOffset(armW, armH)
+        arrow.B.Size = UDim2.fromOffset(armW, armH)
+        arrow.A.Position = UDim2.new(0.5, -math.floor(armW * 0.9), 0.5, 0)
+        arrow.B.Position = UDim2.new(0.5, math.floor(armW * 0.9), 0.5, 0)
+    end
 end
 
 local targets = {}
@@ -1007,7 +1407,9 @@ local function update()
     end
 
     for _, target in ipairs(targets) do
-        target.Distance = (target.Root.Position - cameraPosition).Magnitude
+        local world = (target.Root and target.Root.Parent and target.Root.Position) or target.World
+        target.World = world
+        target.Distance = world and (world - cameraPosition).Magnitude or math.huge
     end
     table.sort(targets, function(a, b)
         return a.Distance < b.Distance
@@ -1016,9 +1418,12 @@ local function update()
     table.clear(seen)
     for rank, target in ipairs(targets) do
         local distance = target.Distance
-        updateHighlight(target, distance <= Config.MaxDistance and rank or math.huge, cameraPosition)
+        local world = target.World
+        if target.Root then
+            updateHighlight(target, distance <= Config.MaxDistance and rank or math.huge, cameraPosition)
+        end
         local rootCFrame, low, high
-        if distance <= Config.MaxDistance then
+        if target.Root and distance <= Config.MaxDistance then
             rootCFrame, low, high = bodyBounds(target.Root, target.Parts)
         end
         local left, top, right, bottom
@@ -1070,14 +1475,15 @@ local function update()
             end
             local viewport = camera.ViewportSize
             placeSnap(target.Key, Vector2.new(viewport.X * 0.5, viewport.Y), Vector2.new((left + right) * 0.5, bottom))
-            placeArrow(target.Key, camera, target.Root.Position, true)
+            placeArrow(target.Key, camera, world)
         else
             local line = Snaplines[target.Key]
             if line then
                 line.Frame.Visible = false
             end
-            if target.Root then
-                placeArrow(target.Key, camera, target.Root.Position, false)
+            if world then
+                seen[target.Key] = true
+                placeArrow(target.Key, camera, world)
             end
         end
     end
@@ -1098,6 +1504,15 @@ local function update()
                     Arrows[key] = nil
                     arrow.Holder:Destroy()
                 end
+            end
+        end
+    end
+    for key, arrow in Arrows do
+        if not seen[key] then
+            arrow.Holder.Visible = false
+            if not Players:FindFirstChild(key) then
+                Arrows[key] = nil
+                arrow.Holder:Destroy()
             end
         end
     end
@@ -1143,6 +1558,12 @@ env.ESP = {
         for key in Highlights do
             removeHighlight(key)
         end
+        for key in Adornments do
+            removeHighlight(key)
+        end
+        if AdornFolder then
+            AdornFolder:Destroy()
+        end
         Gui:Destroy()
         env.ESP = nil
     end,
@@ -1187,7 +1608,7 @@ local Config = {
     MaxDistance = 1000,
     MouseEnabled = false,
     SilentEnabled = false,
-    Class = "assault",
+    Class = "assault rifle",
 }
 
 local function syncMode()
@@ -1202,7 +1623,150 @@ local function syncMode()
 end
 syncMode()
 
-local WeaponClasses = { "assault", "pdw", "lmg", "sniper", "shotgun", "pistol" }
+local WeaponClasses = {
+    "global",
+    "assault rifle",
+    "battle rifle",
+    "carbine",
+    "pdw",
+    "lmg",
+    "dmr",
+    "sniper rifle",
+    "shotgun",
+    "pistol",
+    "machine pistol",
+    "revolver",
+    "other",
+}
+
+local ClassAliases = {
+    assault = "assault rifle",
+    ["assault rifles"] = "assault rifle",
+    ["assault rifle"] = "assault rifle",
+    ar = "assault rifle",
+    battle = "battle rifle",
+    ["battle rifles"] = "battle rifle",
+    ["battle rifle"] = "battle rifle",
+    br = "battle rifle",
+    carbine = "carbine",
+    carbines = "carbine",
+    pdw = "pdw",
+    pdws = "pdw",
+    smg = "pdw",
+    ["personal defense weapon"] = "pdw",
+    ["personal defense weapons"] = "pdw",
+    lmg = "lmg",
+    lmgs = "lmg",
+    ["light machine gun"] = "lmg",
+    ["light machine guns"] = "lmg",
+    dmr = "dmr",
+    dmrs = "dmr",
+    ["designated marksman rifle"] = "dmr",
+    ["designated marksman rifles"] = "dmr",
+    sniper = "sniper rifle",
+    snipers = "sniper rifle",
+    ["sniper rifle"] = "sniper rifle",
+    ["sniper rifles"] = "sniper rifle",
+    shotgun = "shotgun",
+    shotguns = "shotgun",
+    pistol = "pistol",
+    pistols = "pistol",
+    ["machine pistol"] = "machine pistol",
+    ["machine pistols"] = "machine pistol",
+    revolver = "revolver",
+    revolvers = "revolver",
+    other = "other",
+}
+
+local function normalizeWeaponClass(value)
+    if type(value) ~= "string" or value == "" then
+        return nil
+    end
+    local key = string.lower((value:gsub("[%s%-%_/]+", " "):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")))
+    return ClassAliases[key]
+end
+
+local function weaponNameKey(value)
+    if type(value) ~= "string" then
+        return ""
+    end
+    return string.upper((value:gsub("[^%w]+", "")))
+end
+
+local WeaponClassByName = {}
+local function registerClassWeapons(className, names)
+    for _, name in names do
+        local key = weaponNameKey(name)
+        if key ~= "" then
+            WeaponClassByName[key] = className
+        end
+    end
+end
+
+registerClassWeapons("assault rifle", {
+    "AK-12", "VZ.806", "VZ 806", "AN-94", "AS VAL", "MK16 SOCOM", "UAR A1", "M16A4", "AR36", "M16A1", "M16A3",
+    "TYPE 20", "F90 MBR", "K2", "FAMAS G2", "AK-47", "AK47", "L85A2", "M416", "AK-74", "FAMAS F1", "QBZ-95",
+    "AKM", "QBZ-97A", "AK-103", "TAR-21", "TYPE 88", "M231", "C7A2", "AK-12M", "MAC-15", "STG-44", "IA2 AR",
+    "VZ.808", "VZ 808", "L85A3", "AK-15", "SPEAR LT", "VHS-D2", "AK-19", "M38A7", "AEK-971", "M16A2E2 ACR",
+    "GERAT 90", "GOLDEN XM16E1", "XM16E1", "G36", "AUG A1", "AUG A2", "AUG A3", "SCAR-L", "FAMAS", "HK416",
+})
+registerClassWeapons("pdw", {
+    "SMX-9K", "PDX-45", "AR36C", "X46A2", "MAC-10", "MAC10", "P90", "MP-9", "MP9", "MK16 SOCOM CQB", "MARS",
+    "SMX-9", "XM633 DOE", "L2A3", "SMX-9SD", "HONEY BADGER", "SMX-10", "M3A1", "SMX-9/10", "UZI", "UAR A3 PARA",
+    "K7", "AKS-74U", "PPSH-41", "PPSH", "FAL PARA SHORTY", "PP-19 BIZON", "PP19", "BIZON", "VECTOR 45", "VECTOR",
+    "KRISS", "MP40", "X95 SMG", "TOMMY GUN", "TOMMY", "RAMA 1130", "MAC-31", "IA2 SMG", "BWC9 A", "FIVE-0",
+    "LUTY", "M416C", "RATTLER", "FAMAS COMMANDO", "MP5", "MP5K", "MP7", "MP10", "UMP", "UMP45", "SR-3",
+})
+registerClassWeapons("lmg", {
+    "LSV M/04", "M249 SAW", "M249", "M60E6", "M60", "UAR HBAR", "HBAR", "IAR36", "RPK-12", "L86A2 LSW", "L86",
+    "AK-12BR", "RPK", "MG80", "HAMR IAR", "HAMR", "RPK-74", "QJB-95 LSW", "MG3KWS", "MG3", "FALO 50.41",
+    "M1918A2", "M27 IAR", "RPK-16", "PKP PECHENEG", "PECHENEG", "MGV-176", "PKM", "STONER 96", "AEK-999",
+    "ChainSAW", "MG42", "REAPR-338", "KORD-R", "COLT LMG", "HK21", "MG36",
+})
+registerClassWeapons("sniper rifle", {
+    "INTERVENTION", "MODEL 700", "REMINGTON 700", "CS/LR-3", "AWS", "BFG 50", "BFG", "AWM", "TRG-42", "TRG",
+    "MOSIN NAGANT", "MOSIN", "DRAGUNOV SVDS", "SVDS", "M110A1 CSASS", "CSASS", "CS/LR-4A", "THE FIX", "M1903",
+    "K14", "RCS-10/22", "HECATE II", "HECATE", "FT300", "M82A1", "M82", "BALLISTA", "SCOUT RIFLE", "SCOUT",
+    "WA2000", "TIMBERWOLF", "NTW-20", "DSR-50", "VKS", "OBREZ",
+})
+registerClassWeapons("carbine", {
+    "M4A1", "C25", "AR36K", "M4", "L22A2", "AK-12U", "GROZA-1", "OTS-126", "AK-9", "UAR A3", "PDC-45", "K1A",
+    "SR-3M", "MK16 SOCOM SC", "GROZA-4", "STG-89C", "1858 CARBINE", "SA58 OSW", "AK-105", "JURY", "R SQUARED",
+    "GYROJET CARBINE", "C8A3", "X95R", "SALTY WEASEL", "M337", "MG89B", "VIRTUS", "MINI FIX", "EF88",
+    "AEK-973S", "COLA CANNON", "PKP BYCHOK", "MTS-569", "G36C", "AK105",
+})
+registerClassWeapons("dmr", {
+    "QBU-88", "MK11", "SKS", "PL8", "DRAGUNOV SVU", "SVU", "VSS VINTOREZ", "VSS", "JG-90", "M21", "NEOWULF TCR",
+    "SA58 SPR", "MK20 SSR", "R-10/22", "SAIGA SAR", "SVK-12", "VZ.806 PPS", "UAR A3M2", "REGULATOR", "M28 GDMR",
+    "MK12 SPR", "MSG90", "SR-25",
+})
+registerClassWeapons("battle rifle", {
+    "M14", "NEOWULF ECR", "MK17 SOCOM", "STG-59H", "GUSTAV 66", "M417A2", "FAL 50.63 PARA", "HENRY 45-70",
+    "FAL 50.00", "FAL", "VZ.806 BR", "AK-308", "IA2 BR", "M7 NGSW", "HCAR", "DOOMBOX", "SHAK-12",
+    "MK17 ULTRALIGHT", "RM 277", "SCAR-H", "G3", "HK417", "BEOWULF",
+})
+registerClassWeapons("shotgun", {
+    "KSG 12", "KSG", "MODEL 870", "REMINGTON 870", "AK-12/76", "M37 12G", "TERMINATOR 12G", "KS-23M", "KS-23",
+    "KS23", "SAIGA-12", "SAIGA", "STEVENS DB", "STEVENS", "E-GUN", "SSG-410", "SCX-12", "AA-12", "SPAS-12",
+    "SPAS", "DT11", "USAS-12", "USAS", "ORIGIN 12", "DBV",
+})
+registerClassWeapons("pistol", {
+    "M9", "G17", "M1911A1", "M1911", "M17", "DEAGLE L5", "DEAGLE", "G21", "G23", "M45A1", "G40", "KG-99", "G50",
+    "FIVE SEVEN", "FIVESEVEN", "ZIP 22", "GI M1", "HARDBALLER", "IZHEVSK PB", "MAKAROV PM", "MAKAROV", "GB-22",
+    "DEAGLE XIX", "AUTOMAG III", "GSH-18", "GYROJET MARK I", "GSP GRIZZLY", "M2011", "U-416/22", "ALIEN",
+    "AF2011-A1", "BOXY BUSTER", "MP412", "SERBU", "SFG",
+})
+registerClassWeapons("machine pistol", {
+    "MAC-11", "G18C", "G18", "93R", "PP-2000", "TEC-9", "TEC9", "MICRO UZI", "SKORPION", "ŠKORPION", "VZ.61",
+    "ASMI", "MP1911", "ARM PISTOL", "AEK-919K",
+})
+registerClassWeapons("revolver", {
+    "MP412 REX", "REX", "MATEBA 6", "MATEBA", "1858 NEW ARMY", "RH-44", "JUDGE", "EXECUTIONER", "RSH-12",
+})
+registerClassWeapons("other", {
+    "SUPER SHORTY", "STAKEOUT", "SFG 50", "M79 THUMPER", "SAWED OFF", "SAIGA-12U", "COILGUN", "SASS 308", "THUNDER",
+})
+
 local function profileFrom(source)
     return {
         MouseEnabled = source.MouseEnabled and true or false,
@@ -1222,33 +1786,143 @@ local function profileFrom(source)
     }
 end
 Config.Profiles = {}
-for _, name in WeaponClasses do
-    Config.Profiles[name] = profileFrom(Config)
+do
+    local legacy = {
+        assault = "assault rifle",
+        sniper = "sniper rifle",
+        pdw = "pdw",
+        lmg = "lmg",
+        shotgun = "shotgun",
+        pistol = "pistol",
+    }
+    local existing = {}
+    if type(Config.Profiles) == "table" then
+        for name, profile in Config.Profiles do
+            existing[name] = profile
+        end
+    end
+    for _, name in WeaponClasses do
+        local from = existing[name]
+        if not from then
+            for oldName, newName in legacy do
+                if newName == name and existing[oldName] then
+                    from = existing[oldName]
+                    break
+                end
+            end
+        end
+        Config.Profiles[name] = from and profileFrom(from) or profileFrom(Config)
+    end
+end
+
+local function resolveWeaponClass(weapon)
+    if type(weapon) ~= "table" and typeof(weapon) ~= "Instance" then
+        return nil
+    end
+    local data = weapon._weaponData or weapon.weaponData or weapon._data
+    if type(data) == "table" then
+        for _, key in {
+            "type", "Type", "category", "Category", "weaponType", "WeaponType", "weapontype",
+            "guntype", "GunType", "class", "Class", "slot", "Slot",
+        } do
+            local mapped = normalizeWeaponClass(data[key])
+            if mapped then
+                return mapped
+            end
+        end
+        for _, key in { "displayname", "displayName", "name", "Name", "gunname", "GunName" } do
+            local label = data[key]
+            if type(label) == "string" then
+                local exact = WeaponClassByName[weaponNameKey(label)]
+                if exact then
+                    return exact
+                end
+                local mapped = normalizeWeaponClass(label)
+                if mapped then
+                    return mapped
+                end
+            end
+        end
+    end
+    for _, key in { "_name", "_weaponName", "Name", "name" } do
+        local label = weapon[key]
+        if type(label) == "string" then
+            local exact = WeaponClassByName[weaponNameKey(label)]
+            if exact then
+                return exact
+            end
+        end
+    end
+    local blob = ""
+    if type(data) == "table" then
+        blob = tostring(data.displayname or data.displayName or data.name or data.Name or data.type or "")
+    end
+    if blob == "" and type(weapon._name) == "string" then
+        blob = weapon._name
+    end
+    local upper = string.upper(blob)
+    if upper == "" then
+        return nil
+    end
+    local exact = WeaponClassByName[weaponNameKey(upper)]
+    if exact then
+        return exact
+    end
+    local tokenGroups = {
+        { "machine pistol", { "MACHINE PISTOL", "G18", "TEC-9", "TEC9", "MAC-11", "MICRO UZI", "SKORPION", "93R", "PP-2000" } },
+        { "revolver", { "REVOLVER", "REX", "MATEBA", "JUDGE", "RH-44", "RSH-12", "EXECUTIONER" } },
+        { "pistol", { "PISTOL", "M9", "G17", "M1911", "DEAGLE", "FIVE SEVEN", "MAKAROV", "ZIP" } },
+        { "shotgun", { "SHOTGUN", "KSG", "SAIGA", "SPAS", "AA-12", "USAS", "KS-23", "870", "ORIGIN 12" } },
+        { "sniper rifle", { "SNIPER", "INTERVENTION", "AWM", "BFG", "HECATE", "MOSIN", "TRG", "WA2000", "NTW" } },
+        { "dmr", { "DMR", "MK11", "SKS", "VSS", "SVU", "MK12", "MK20", "GDMR", "MSG90" } },
+        { "lmg", { "LMG", "M249", "M60", "RPK", "MG3", "MG42", "HBAR", "PECHENEG", "PKM", "HAMR" } },
+        { "pdw", { "PDW", "SMG", "MP5", "MP7", "P90", "VECTOR", "UMP", "PPSH", "BIZON", "UZI", "TOMMY" } },
+        { "battle rifle", { "BATTLE RIFLE", "FAL", "SCAR-H", "MK17", "HCAR", "G3", "HK417", "SHAK-12", "M14" } },
+        { "carbine", { "CARBINE", "M4A1", "G36C", "AK-12U", "AK-105", "GROZA", "SR-3M", "C8A3" } },
+        { "assault rifle", { "ASSAULT", "AK-12", "M16", "FAMAS", "SCAR-L", "HK416", "AEK", "TAR-21" } },
+        { "other", { "SHORTY", "THUMPER", "OBREZ", "COILGUN", "STAKEOUT" } },
+    }
+    for _, group in tokenGroups do
+        for _, token in group[2] do
+            if string.find(upper, token, 1, true) then
+                return group[1]
+            end
+        end
+    end
+    return "assault rifle"
+end
+
+local function copyProfileInto(target, source)
+    if not (target and source) then
+        return
+    end
+    target.MouseEnabled = source.MouseEnabled and true or false
+    target.SilentEnabled = source.SilentEnabled and true or false
+    target.MouseFOV = source.MouseFOV
+    target.MouseShowFOV = source.MouseShowFOV
+    target.MouseFOVOrigin = source.MouseFOVOrigin
+    target.SilentFOV = source.SilentFOV
+    target.SilentShowFOV = source.SilentShowFOV
+    target.SilentFOVOrigin = source.SilentFOVOrigin
+    target.Smoothness = source.Smoothness
+    target.MouseKey = source.MouseKey
+    target.HitChance = source.HitChance
+    target.TargetPart = source.TargetPart
+    target.VisibleCheck = source.VisibleCheck
+    target.MaxDistance = source.MaxDistance
 end
 
 local function applyHeldProfile()
-    local held = (getgenv and getgenv().TapologyWeaponClass) or Config.Class or "assault"
-    if Config.Profiles[held] == nil then
-        held = "assault"
+    local held = normalizeWeaponClass((getgenv and getgenv().TapologyWeaponClass) or Config.Class) or "assault rifle"
+    if held == "global" or Config.Profiles[held] == nil then
+        held = "assault rifle"
     end
     local profile = Config.Profiles[held]
     if not profile then
         return
     end
-    Config.MouseEnabled = profile.MouseEnabled
-    Config.SilentEnabled = profile.SilentEnabled
-    Config.MouseFOV = profile.MouseFOV
-    Config.MouseShowFOV = profile.MouseShowFOV
-    Config.MouseFOVOrigin = profile.MouseFOVOrigin
-    Config.SilentFOV = profile.SilentFOV
-    Config.SilentShowFOV = profile.SilentShowFOV
-    Config.SilentFOVOrigin = profile.SilentFOVOrigin
-    Config.Smoothness = profile.Smoothness
-    Config.MouseKey = profile.MouseKey
-    Config.HitChance = profile.HitChance
-    Config.TargetPart = profile.TargetPart
-    Config.VisibleCheck = profile.VisibleCheck
-    Config.MaxDistance = profile.MaxDistance
+    Config.Class = held
+    copyProfileInto(Config, profile)
 end
 
 local env = getgenv and getgenv() or _G
@@ -1794,11 +2468,25 @@ end
 
 local Circles = { Mouse = newCircle("MouseFOV"), Silent = newCircle("SilentFOV") }
 
-local function drawCircle(circle, shown, radius, color, transparency, cursor)
-    circle.Holder.Visible = shown
-    if not shown then return end
+local function drawCircle(circle, shown, radius, color, transparency, cursor, dt)
+    if not shown then
+        circle.Holder.Visible = false
+        circle.DisplayRadius = radius
+        return
+    end
+    local current = circle.DisplayRadius
+    if typeof(current) ~= "number" then
+        current = radius
+    end
+    local alpha = 1 - math.exp(-(math.max(dt or 0.016, 0)) * 14)
+    current += (radius - current) * alpha
+    if math.abs(current - radius) < 0.15 then
+        current = radius
+    end
+    circle.DisplayRadius = current
+    circle.Holder.Visible = true
     circle.Holder.Position = UDim2.fromOffset(math.floor(cursor.X + 0.5), math.floor(cursor.Y + 0.5))
-    local size = math.floor(radius + 0.5) * 2
+    local size = math.floor(current + 0.5) * 2
     circle.Line.Size = UDim2.fromOffset(size, size)
     circle.Outline.Size = UDim2.fromOffset(size + 2, size + 2)
     circle.Inline.Size = UDim2.fromOffset(math.max(size - 2, 0), math.max(size - 2, 0))
@@ -1826,8 +2514,26 @@ table.insert(Connections, RunService.RenderStepped:Connect(function(dt)
 
     local mouseOrigin = fovOrigin("mouse")
     local silentOrigin = fovOrigin("silent")
-    drawCircle(Circles.Mouse, Config.Mouse and Config.MouseShowFOV, Config.MouseFOV, Config.MouseFOVColor, Config.MouseFOVTransparency, mouseOrigin)
-    drawCircle(Circles.Silent, Config.Silent and Config.SilentShowFOV, Config.SilentFOV, Config.SilentFOVColor, Config.SilentFOVTransparency, silentOrigin)
+    local heldClass = normalizeWeaponClass(getgenv().TapologyWeaponClass)
+    local showHeldFov = heldClass ~= nil and heldClass ~= "global" and Config.Profiles[heldClass] ~= nil
+    drawCircle(
+        Circles.Mouse,
+        showHeldFov and Config.Mouse and Config.MouseShowFOV,
+        Config.MouseFOV,
+        Config.MouseFOVColor,
+        Config.MouseFOVTransparency,
+        mouseOrigin,
+        dt
+    )
+    drawCircle(
+        Circles.Silent,
+        showHeldFov and Config.Silent and Config.SilentShowFOV,
+        Config.SilentFOV,
+        Config.SilentFOVColor,
+        Config.SilentFOVTransparency,
+        silentOrigin,
+        dt
+    )
 
     if not Config.Enabled then
         SilentTarget = nil
@@ -1857,7 +2563,8 @@ table.insert(Connections, RunService.RenderStepped:Connect(function(dt)
             local screen = workspace.CurrentCamera:WorldToViewportPoint(target.Part.Position)
             local delta = Vector2.new(screen.X, screen.Y) - mouseOrigin
 
-            local share = 1 - math.clamp(Config.Smoothness, 0, 0.98) ^ (dt * 60)
+            local smooth = tonumber(Config.Smoothness) or 0
+            local share = 1 - math.clamp(smooth, 0, 0.98) ^ (math.max(dt or 0, 0) * 60)
             local step = delta * share
             if step.Magnitude > 0.5 then
                 mousemoverel(step.X, step.Y)
@@ -1869,6 +2576,7 @@ end))
 env.Aim = {
     Config = Config,
     Classes = WeaponClasses,
+    Classify = resolveWeaponClass,
     SilentAvailable = Modules ~= nil and Modules.NetworkClient ~= nil,
     LastSilent = function()
         return LastSilent
@@ -1969,40 +2677,82 @@ local Config = {
     WorldMaterial = "SmoothPlastic",
 
     Skybox = false,
-    SkyboxId = "Pink Daylight",
+    SkyboxId = "Afternoon",
     Skyboxes = {
-        ["Pink Daylight"] = {
-            SkyboxBk = "rbxassetid://271042516",
-            SkyboxDn = "rbxassetid://271077243",
-            SkyboxFt = "rbxassetid://271042556",
-            SkyboxLf = "rbxassetid://271042310",
-            SkyboxRt = "rbxassetid://271042467",
-            SkyboxUp = "rbxassetid://271077958",
-        },
-        ["Purple Nebula"] = {
-            SkyboxBk = "rbxassetid://159454299",
-            SkyboxDn = "rbxassetid://159454296",
-            SkyboxFt = "rbxassetid://159454293",
-            SkyboxLf = "rbxassetid://159454286",
-            SkyboxRt = "rbxassetid://159454300",
-            SkyboxUp = "rbxassetid://159454288",
-        },
-        ["Night Sky"] = {
-            SkyboxBk = "rbxassetid://12064107",
-            SkyboxDn = "rbxassetid://12064152",
-            SkyboxFt = "rbxassetid://12064121",
-            SkyboxLf = "rbxassetid://12063984",
-            SkyboxRt = "rbxassetid://12064115",
-            SkyboxUp = "rbxassetid://12064131",
-        },
-        ["Cloudy"] = {
-            SkyboxBk = "rbxassetid://151165214",
-            SkyboxDn = "rbxassetid://151165197",
-            SkyboxFt = "rbxassetid://151165224",
-            SkyboxLf = "rbxassetid://151165191",
-            SkyboxRt = "rbxassetid://151165206",
-            SkyboxUp = "rbxassetid://151165227",
-        },
+        ["Afternoon"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://162001926", SkyboxDn = "rbxassetid://161998893", SkyboxFt = "rbxassetid://162001897", SkyboxBk = "rbxassetid://162001887", SkyboxLf = "rbxassetid://162001904", SkyboxRt = "rbxassetid://162001919" },
+        ["Blue Space"] = { StarCount = 0, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://367149078", SkyboxDn = "rbxassetid://367147970", SkyboxFt = "rbxassetid://366731193", SkyboxBk = "rbxassetid://366731024", SkyboxLf = "rbxassetid://366731613", SkyboxRt = "rbxassetid://366731514" },
+        ["Classic Roblox"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://11138465883", SkyboxDn = "rbxassetid://11138453351", SkyboxFt = "rbxassetid://11138458027", SkyboxBk = "rbxassetid://11138450201", SkyboxLf = "rbxassetid://11138460736", SkyboxRt = "rbxassetid://11138463127", SunTextureId = "rbxassetid://11138537872" },
+        ["Cloudy"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://246480504", SkyboxDn = "rbxassetid://246480523", SkyboxFt = "rbxassetid://246480105", SkyboxBk = "rbxassetid://246480323", SkyboxLf = "rbxassetid://246480549", SkyboxRt = "rbxassetid://246480565" },
+        ["Dusk"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 11, SkyboxUp = "rbxassetid://9778106496", SkyboxDn = "rbxassetid://9778110864", SkyboxFt = "rbxassetid://9778101192", SkyboxBk = "rbxassetid://9778108979", SkyboxLf = "rbxassetid://9778103329", SkyboxRt = "rbxassetid://9778104889" },
+        ["Dawn"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://323478865", SkyboxDn = "rbxassetid://323481190", SkyboxFt = "rbxassetid://323480314", SkyboxBk = "rbxassetid://323479840", SkyboxLf = "rbxassetid://323480786", SkyboxRt = "rbxassetid://323480131" },
+        ["Dark Skies"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://149397702", SkyboxDn = "rbxassetid://149397686", SkyboxFt = "rbxassetid://149397697", SkyboxBk = "rbxassetid://149397692", SkyboxLf = "rbxassetid://149397684", SkyboxRt = "rbxassetid://149397688" },
+        ["Earth"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://15753304473", SkyboxDn = "rbxassetid://15753362674", SkyboxFt = "rbxassetid://15753305823", SkyboxBk = "rbxassetid://15753305495", SkyboxLf = "rbxassetid://15753310707", SkyboxRt = "rbxassetid://15753304774" },
+        ["Ethereal"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://16823395515", SkyboxDn = "rbxassetid://16823388586", SkyboxFt = "rbxassetid://16823390254", SkyboxBk = "rbxassetid://16823386986", SkyboxLf = "rbxassetid://16823392344", SkyboxRt = "rbxassetid://16823394120" },
+        ["Galaxy"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://2049518578", SkyboxDn = "rbxassetid://2049519279", SkyboxFt = "rbxassetid://2049519882", SkyboxBk = "rbxassetid://2049520382", SkyboxLf = "rbxassetid://2049522478", SkyboxRt = "rbxassetid://2049521207" },
+        ["Heaven"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://7951703855", SkyboxDn = "rbxassetid://7951706908", SkyboxFt = "rbxassetid://7951694757", SkyboxBk = "rbxassetid://7951826533", SkyboxLf = "rbxassetid://7951697216", SkyboxRt = "rbxassetid://7951700251" },
+        ["Horizontal Milky Way"] = { StarCount = 0, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://714276621", SkyboxDn = "rbxassetid://714276541", SkyboxFt = "rbxassetid://714276657", SkyboxBk = "rbxassetid://714276643", SkyboxLf = "rbxassetid://714276648", SkyboxRt = "rbxassetid://714276638" },
+        ["Jungle"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://525546479", SkyboxDn = "rbxassetid://525544628", SkyboxFt = "rbxassetid://525548536", SkyboxBk = "rbxassetid://525546178", SkyboxLf = "rbxassetid://525550171", SkyboxRt = "rbxassetid://525545319" },
+        ["Mountains"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://48015387", SkyboxDn = "rbxassetid://48015300", SkyboxFt = "rbxassetid://368388290", SkyboxBk = "rbxassetid://368385273", SkyboxLf = "rbxassetid://368390615", SkyboxRt = "rbxassetid://368385190" },
+        ["Nebula"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://171448889", SkyboxDn = "rbxassetid://171448902", SkyboxFt = "rbxassetid://171448848", SkyboxBk = "rbxassetid://171448875", SkyboxLf = "rbxassetid://171448933", SkyboxRt = "rbxassetid://171448925" },
+        ["Night"] = { StarCount = 0, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://12064131", SkyboxDn = "rbxassetid://12064152", SkyboxFt = "rbxassetid://12064121", SkyboxBk = "rbxassetid://12064107", SkyboxLf = "rbxassetid://12063984", SkyboxRt = "rbxassetid://12064115" },
+        ["Night Light"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://171447068", SkyboxDn = "rbxassetid://171447094", SkyboxFt = "rbxassetid://171447041", SkyboxBk = "rbxassetid://171447054", SkyboxLf = "rbxassetid://171447128", SkyboxRt = "rbxassetid://171447111" },
+        ["Ocean Sky"] = { StarCount = 3000, SunAngularSize = 1, MoonAngularSize = 0, SkyboxUp = "rbxassetid://11854708161", SkyboxDn = "rbxassetid://11854687121", SkyboxFt = "rbxassetid://11854693863", SkyboxBk = "rbxassetid://11854686548", SkyboxLf = "rbxassetid://11854696162", SkyboxRt = "rbxassetid://11854698541", SunTextureId = "rbxassetid://4774583925", MoonTextureId = "rbxassetid://4774580371" },
+        ["Pink Clouds"] = { StarCount = 1334, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://271077958", SkyboxDn = "rbxassetid://271077243", SkyboxFt = "rbxassetid://271042556", SkyboxBk = "rbxassetid://271042516", SkyboxLf = "rbxassetid://271042310", SkyboxRt = "rbxassetid://271042467" },
+        ["Pink Daylight"] = { SkyboxUp = "rbxassetid://271077958", SkyboxDn = "rbxassetid://271077243", SkyboxFt = "rbxassetid://271042556", SkyboxBk = "rbxassetid://271042516", SkyboxLf = "rbxassetid://271042310", SkyboxRt = "rbxassetid://271042467" },
+        ["Red Dusk"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://136208328681929", SkyboxDn = "rbxassetid://123407860042117", SkyboxFt = "rbxassetid://132624761762466", SkyboxBk = "rbxassetid://85146619291315", SkyboxLf = "rbxassetid://102069641249982", SkyboxRt = "rbxassetid://136526747107728" },
+        ["Redshift"] = { StarCount = 0, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://401664936", SkyboxDn = "rbxassetid://401664862", SkyboxFt = "rbxassetid://401664960", SkyboxBk = "rbxassetid://401664839", SkyboxLf = "rbxassetid://401664881", SkyboxRt = "rbxassetid://401664901" },
+        ["Saturn"] = { StarCount = 3000, SunAngularSize = 10, MoonAngularSize = 0, SkyboxUp = "rbxassetid://1898736761", SkyboxDn = "rbxassetid://1898727189", SkyboxFt = "rbxassetid://1898722814", SkyboxBk = "rbxassetid://1898724755", SkyboxLf = "rbxassetid://1898729298", SkyboxRt = "rbxassetid://1898741025", MoonTextureId = "rbxassetid://0" },
+        ["SFOTH"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://1014449", SkyboxDn = "rbxassetid://1012891", SkyboxFt = "rbxassetid://1012887", SkyboxBk = "rbxassetid://1012890", SkyboxLf = "rbxassetid://1012889", SkyboxRt = "rbxassetid://1012888" },
+        ["Smoke"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://171410742", SkyboxDn = "rbxassetid://171410748", SkyboxFt = "rbxassetid://171410730", SkyboxBk = "rbxassetid://171410736", SkyboxLf = "rbxassetid://171410766", SkyboxRt = "rbxassetid://171410755" },
+        ["Solid Black"] = { StarCount = 0, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://2013298", SkyboxDn = "rbxassetid://2013298", SkyboxFt = "rbxassetid://2013298", SkyboxBk = "rbxassetid://2013298", SkyboxLf = "rbxassetid://2013298", SkyboxRt = "rbxassetid://2013298" },
+        ["Space"] = { StarCount = 0, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://155441905", SkyboxDn = "rbxassetid://155441905", SkyboxFt = "rbxassetid://155441905", SkyboxBk = "rbxassetid://155441905", SkyboxLf = "rbxassetid://155441905", SkyboxRt = "rbxassetid://155441905" },
+        ["Storm"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://171410789", SkyboxDn = "rbxassetid://171410792", SkyboxFt = "rbxassetid://171410775", SkyboxBk = "rbxassetid://171410784", SkyboxLf = "rbxassetid://171410807", SkyboxRt = "rbxassetid://171410798" },
+        ["Sunset"] = { StarCount = 5000, SunAngularSize = 18, MoonAngularSize = 11, SkyboxUp = "rbxassetid://264907379", SkyboxDn = "rbxassetid://264907909", SkyboxFt = "rbxassetid://264909420", SkyboxBk = "rbxassetid://264908339", SkyboxLf = "rbxassetid://264909758", SkyboxRt = "rbxassetid://264908886" },
+        ["Underworld"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://171561009", SkyboxDn = "rbxassetid://171561019", SkyboxFt = "rbxassetid://171560968", SkyboxBk = "rbxassetid://171560994", SkyboxLf = "rbxassetid://171561065", SkyboxRt = "rbxassetid://171561026" },
+        ["Vertical Milky Way"] = { StarCount = 3000, SunAngularSize = 1.440000057220459, MoonAngularSize = 0.5699999928474426, SkyboxUp = "rbxassetid://5559302033", SkyboxDn = "rbxassetid://5559290893", SkyboxFt = "rbxassetid://5559300879", SkyboxBk = "rbxassetid://5559289158", SkyboxLf = "rbxassetid://5559292825", SkyboxRt = "rbxassetid://5559302989" },
+        ["White"] = { StarCount = 0, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://321136141", SkyboxDn = "rbxassetid://321136141", SkyboxFt = "rbxassetid://321136141", SkyboxBk = "rbxassetid://321136141", SkyboxLf = "rbxassetid://321136141", SkyboxRt = "rbxassetid://321136141" },
+        ["GreenHaze"] = { SunAngularSize = 0, SkyboxUp = "rbxassetid://160193458", SkyboxDn = "rbxassetid://160193466", SkyboxFt = "rbxassetid://160193461", SkyboxBk = "rbxassetid://160193404", SkyboxLf = "rbxassetid://160193469", SkyboxRt = "rbxassetid://160193463" },
+        ["Space2"] = { StarCount = 3000, SunAngularSize = 11, MoonAngularSize = 20, SkyboxUp = "rbxassetid://11844053742", SkyboxDn = "rbxassetid://11844069700", SkyboxFt = "rbxassetid://11844067209", SkyboxBk = "rbxassetid://11844076072", SkyboxLf = "rbxassetid://11844063543", SkyboxRt = "rbxassetid://11844058446", MoonTextureId = "rbxassetid://11844121592" },
+        ["PinkMountains"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://160188588", SkyboxDn = "rbxassetid://160188614", SkyboxFt = "rbxassetid://160188609", SkyboxBk = "rbxassetid://160188495", SkyboxLf = "rbxassetid://160188589", SkyboxRt = "rbxassetid://160188597" },
+        ["Valentines"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://11427771954", SkyboxDn = "rbxassetid://11427770685", SkyboxFt = "rbxassetid://11427769401", SkyboxBk = "rbxassetid://11427769401", SkyboxLf = "rbxassetid://11427769401", SkyboxRt = "rbxassetid://11427769401" },
+        ["PinkArt"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://79190209626172", SkyboxDn = "rbxassetid://78865378050055", SkyboxFt = "rbxassetid://104560113223878", SkyboxBk = "rbxassetid://71607054149497", SkyboxLf = "rbxassetid://80395333901607", SkyboxRt = "rbxassetid://87570388049514" },
+        ["PurplePlanet"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://16262366016", SkyboxDn = "rbxassetid://16262358026", SkyboxFt = "rbxassetid://16262360469", SkyboxBk = "rbxassetid://16262356578", SkyboxLf = "rbxassetid://16262362003", SkyboxRt = "rbxassetid://16262363873", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Blizzard"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://16653228333", SkyboxDn = "rbxassetid://16653222701", SkyboxFt = "rbxassetid://16653224051", SkyboxBk = "rbxassetid://16653221738", SkyboxLf = "rbxassetid://16653225849", SkyboxRt = "rbxassetid://16653227200", SunTextureId = "rbxassetid://6196665106", MoonTextureId = "rbxassetid://6444320592" },
+        ["Winter"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://155674931", SkyboxDn = "rbxassetid://155674246", SkyboxFt = "rbxassetid://155657609", SkyboxBk = "rbxassetid://155657655", SkyboxLf = "rbxassetid://155657671", SkyboxRt = "rbxassetid://155657619", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["FlamingSunset"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://415688354", SkyboxDn = "rbxassetid://415688193", SkyboxFt = "rbxassetid://415688242", SkyboxBk = "rbxassetid://415688378", SkyboxLf = "rbxassetid://415688310", SkyboxRt = "rbxassetid://415688274", SunTextureId = "rbxassetid://6196665106", MoonTextureId = "rbxassetid://6444320592" },
+        ["Mountains 2"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://15359412677", SkyboxDn = "rbxassetid://15359411132", SkyboxFt = "rbxassetid://15359412131", SkyboxBk = "rbxassetid://15359410490", SkyboxLf = "rbxassetid://15359411633", SkyboxRt = "rbxassetid://15359417656", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["FPSBoost"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://11457548274", SkyboxDn = "rbxassetid://11457548274", SkyboxFt = "rbxassetid://11457548274", SkyboxBk = "rbxassetid://11457548274", SkyboxLf = "rbxassetid://11457548274", SkyboxRt = "rbxassetid://11457548274", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["AestheticMountains"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://15470207755", SkyboxDn = "rbxassetid://15470151245", SkyboxFt = "rbxassetid://15470200128", SkyboxBk = "rbxassetid://15470198023", SkyboxLf = "rbxassetid://15470202648", SkyboxRt = "rbxassetid://15470204862", SunTextureId = "rbxassetid://6196665106", MoonTextureId = "rbxassetid://6444320592" },
+        ["BetterNight3"] = { StarCount = 500, SunAngularSize = 21, MoonAngularSize = 1.5, SkyboxUp = "rbxassetid://2670644331", SkyboxDn = "rbxassetid://2670643365", SkyboxFt = "rbxassetid://2670643214", SkyboxBk = "rbxassetid://2670643994", SkyboxLf = "rbxassetid://2670643070", SkyboxRt = "rbxassetid://2670644173", SunTextureId = "rbxassetid://6196665106", MoonTextureId = "rbxassetid://1075087760" },
+        ["Galaxy2"] = { StarCount = 500, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://14164405298", SkyboxDn = "rbxassetid://14164386126", SkyboxFt = "rbxassetid://14164389230", SkyboxBk = "rbxassetid://14164368678", SkyboxLf = "rbxassetid://14164398493", SkyboxRt = "rbxassetid://14164402782", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Aesthetic3"] = { StarCount = 500, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://151165227", SkyboxDn = "rbxassetid://151165197", SkyboxFt = "rbxassetid://151165224", SkyboxBk = "rbxassetid://151165214", SkyboxLf = "rbxassetid://151165191", SkyboxRt = "rbxassetid://151165206", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["PurpleSpace"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://15983964246", SkyboxDn = "rbxassetid://15983966825", SkyboxFt = "rbxassetid://5260817288", SkyboxBk = "rbxassetid://15983968922", SkyboxLf = "rbxassetid://15983967420", SkyboxRt = "rbxassetid://15983966246", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Pink"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://271077958", SkyboxDn = "rbxassetid://271077243", SkyboxFt = "rbxassetid://271042556", SkyboxBk = "rbxassetid://271042516", SkyboxLf = "rbxassetid://271042310", SkyboxRt = "rbxassetid://271042467", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["PurpleNight"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://5084576400", SkyboxDn = "rbxassetid://5260653793", SkyboxFt = "rbxassetid://5260817288", SkyboxBk = "rbxassetid://5260808177", SkyboxLf = "rbxassetid://5260800833", SkyboxRt = "rbxassetid://5260800833", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Flame"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://6286790025", SkyboxDn = "rbxassetid://6286782353", SkyboxFt = "rbxassetid://6286784186", SkyboxBk = "rbxassetid://6286780109", SkyboxLf = "rbxassetid://6286785801", SkyboxRt = "rbxassetid://6286788245", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Galaxy3"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://14543371676", SkyboxDn = "rbxassetid://14543358958", SkyboxFt = "rbxassetid://14543257810", SkyboxBk = "rbxassetid://14543264135", SkyboxLf = "rbxassetid://14543275895", SkyboxRt = "rbxassetid://14543280890", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Storm 2"] = { SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://1618913654", SkyboxDn = "rbxassetid://1618913943", SkyboxFt = "rbxassetid://1618913244", SkyboxBk = "rbxassetid://1618912481", SkyboxLf = "rbxassetid://1618912849", SkyboxRt = "rbxassetid://1618911568", SunTextureId = "rbxassetid://1084351190", MoonTextureId = "rbxassetid://1075087760" },
+        ["Milkyway"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://137817405681365", SkyboxDn = "rbxassetid://108406529909981", SkyboxFt = "rbxassetid://104400530594543", SkyboxBk = "rbxassetid://129876530632297", SkyboxLf = "rbxassetid://73372229972523", SkyboxRt = "rbxassetid://87408857415924", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["PurpleClouds"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://570557727", SkyboxDn = "rbxassetid://570557775", SkyboxFt = "rbxassetid://570557559", SkyboxBk = "rbxassetid://570557514", SkyboxLf = "rbxassetid://570557620", SkyboxRt = "rbxassetid://570557672", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["BlueClouds"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://591059642", SkyboxDn = "rbxassetid://591059876", SkyboxFt = "rbxassetid://591058104", SkyboxBk = "rbxassetid://591058823", SkyboxLf = "rbxassetid://591057861", SkyboxRt = "rbxassetid://591057625", SunTextureId = "rbxassetid://6196665106", MoonTextureId = "rbxassetid://6444320592" },
+        ["BetterNight"] = { StarCount = 3000, SkyboxUp = "rbxassetid://15470303050", SkyboxDn = "rbxassetid://15470291746", SkyboxFt = "rbxassetid://15470294431", SkyboxBk = "rbxassetid://15470289121", SkyboxLf = "rbxassetid://15470297162", SkyboxRt = "rbxassetid://15470299887" },
+        ["Cloudy 2"] = { StarCount = 3000, SkyboxUp = "rbxassetid://4495867486", SkyboxDn = "rbxassetid://4495864887", SkyboxFt = "rbxassetid://4495865458", SkyboxBk = "rbxassetid://4495864450", SkyboxLf = "rbxassetid://4495866035", SkyboxRt = "rbxassetid://4495866584" },
+        ["NetherWorld"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://14365019327", SkyboxDn = "rbxassetid://14365023350", SkyboxFt = "rbxassetid://14365018399", SkyboxBk = "rbxassetid://14365019002", SkyboxLf = "rbxassetid://14365018705", SkyboxRt = "rbxassetid://14365018143", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["NewYork"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://11333967970", SkyboxDn = "rbxassetid://11333969768", SkyboxFt = "rbxassetid://11333964303", SkyboxBk = "rbxassetid://11333973069", SkyboxLf = "rbxassetid://11333971332", SkyboxRt = "rbxassetid://11333982864", SunTextureId = "rbxassetid://6196665106", MoonTextureId = "rbxassetid://6444320592" },
+        ["Purple2"] = { StarCount = 3000, SunAngularSize = 11, MoonAngularSize = 0, SkyboxUp = "rbxassetid://8107849791", SkyboxDn = "rbxassetid://6444884785", SkyboxFt = "rbxassetid://8107841671", SkyboxBk = "rbxassetid://8107841671", SkyboxLf = "rbxassetid://8107841671", SkyboxRt = "rbxassetid://8107841671", SunTextureId = "rbxassetid://6196665106", MoonTextureId = "rbxassetid://6444320592" },
+        ["FunnyStorm"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://6280942402", SkyboxDn = "rbxassetid://6280935347", SkyboxFt = "rbxassetid://6280936575", SkyboxBk = "rbxassetid://6280934001", SkyboxLf = "rbxassetid://6280938749", SkyboxRt = "rbxassetid://6280940989", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Galaxy Alt"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://159454288", SkyboxDn = "rbxassetid://159454296", SkyboxFt = "rbxassetid://159454293", SkyboxBk = "rbxassetid://159454299", SkyboxLf = "rbxassetid://159454293", SkyboxRt = "rbxassetid://159454293", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["BlueSpace"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 0, SkyboxUp = "rbxassetid://16876552681", SkyboxDn = "rbxassetid://16876543880", SkyboxFt = "rbxassetid://16876546384", SkyboxBk = "rbxassetid://16876541778", SkyboxLf = "rbxassetid://16876548320", SkyboxRt = "rbxassetid://16876550345", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Purple3"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://433274285", SkyboxDn = "rbxassetid://433274194", SkyboxFt = "rbxassetid://433274131", SkyboxBk = "rbxassetid://433274085", SkyboxLf = "rbxassetid://433274370", SkyboxRt = "rbxassetid://433274429", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Nebula2"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://16932810138", SkyboxDn = "rbxassetid://16932797813", SkyboxFt = "rbxassetid://16932800523", SkyboxBk = "rbxassetid://16932794531", SkyboxLf = "rbxassetid://16932803722", SkyboxRt = "rbxassetid://16932806825", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Nebula Alt"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://5260824661", SkyboxDn = "rbxassetid://5260653793", SkyboxFt = "rbxassetid://5260817288", SkyboxBk = "rbxassetid://5260808177", SkyboxLf = "rbxassetid://5260800833", SkyboxRt = "rbxassetid://5260811073", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["LunarNight"] = { StarCount = 0, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://187712111", SkyboxDn = "rbxassetid://187712428", SkyboxFt = "rbxassetid://187712836", SkyboxBk = "rbxassetid://187713366", SkyboxLf = "rbxassetid://187713755", SkyboxRt = "rbxassetid://187714525", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Purple"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://8539981085", SkyboxDn = "rbxassetid://8539981943", SkyboxFt = "rbxassetid://8539981721", SkyboxBk = "rbxassetid://8539982183", SkyboxLf = "rbxassetid://8539981424", SkyboxRt = "rbxassetid://8539980766", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Hell"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 11, SkyboxUp = "rbxassetid://11730857150", SkyboxDn = "rbxassetid://11730842997", SkyboxFt = "rbxassetid://11730849615", SkyboxBk = "rbxassetid://11730840088", SkyboxLf = "rbxassetid://11730852920", SkyboxRt = "rbxassetid://11730855491", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Nebula6"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://16694204069", SkyboxDn = "rbxassetid://16694190947", SkyboxFt = "rbxassetid://16694194795", SkyboxBk = "rbxassetid://16694187412", SkyboxLf = "rbxassetid://16694197080", SkyboxRt = "rbxassetid://16694200892", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["DarkishPink"] = { StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, SkyboxUp = "rbxassetid://570555929", SkyboxDn = "rbxassetid://570555964", SkyboxFt = "rbxassetid://570555800", SkyboxBk = "rbxassetid://570555736", SkyboxLf = "rbxassetid://570555840", SkyboxRt = "rbxassetid://570555882", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["RedNight"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://401664936", SkyboxDn = "rbxassetid://401664862", SkyboxFt = "rbxassetid://401664960", SkyboxBk = "rbxassetid://401664839", SkyboxLf = "rbxassetid://401664881", SkyboxRt = "rbxassetid://401664901", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
+        ["Space Alt"] = { StarCount = 3000, SunAngularSize = 0, MoonAngularSize = 0, SkyboxUp = "rbxassetid://166510114", SkyboxDn = "rbxassetid://166510057", SkyboxFt = "rbxassetid://166510116", SkyboxBk = "rbxassetid://166509999", SkyboxLf = "rbxassetid://166510092", SkyboxRt = "rbxassetid://166510131", SunTextureId = "rbxassetid://8281961896", MoonTextureId = "rbxassetid://6444320592" },
     },
 
     Bloom = false,
@@ -2114,8 +2864,28 @@ local function restoreLighting()
         Lighting.OutdoorAmbient = Original.OutdoorAmbient
     end
 end
+local function writeAtmosphereFromConfig()
+    local atmosphere = ensureAtmosphere()
+    atmosphere.Density = tonumber(Config.FogDensity) or 0.3
+    atmosphere.Offset = tonumber(Config.FogOffset) or 0
+    atmosphere.Haze = tonumber(Config.FogHaze) or 1.5
+    atmosphere.Glare = tonumber(Config.FogGlare) or 0
+    if typeof(Config.FogColor) == "Color3" then
+        atmosphere.Color = Color3.new(Config.FogColor.R, Config.FogColor.G, Config.FogColor.B)
+    end
+    if typeof(Config.FogDecay) == "Color3" then
+        atmosphere.Decay = Color3.new(Config.FogDecay.R, Config.FogDecay.G, Config.FogDecay.B)
+    end
+    return atmosphere
+end
+
 local function restoreFog()
+    -- If weather still owns the environment, hand atmosphere back to weather.
     if weatherOwnsEnvironment() then
+        local weather = env.Weather
+        if weather and weather.Reapply then
+            pcall(weather.Reapply)
+        end
         return
     end
     local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
@@ -2151,17 +2921,7 @@ local function restoreSkybox()
 end
 
 local function yieldToWeather()
-    if not weatherOwnsEnvironment() then
-        return false
-    end
-
-    if Grade and Grade.Parent then
-        Grade.Enabled = false
-    end
-    if BloomEffect and BloomEffect.Parent then
-        BloomEffect.Enabled = false
-    end
-    return true
+    return weatherOwnsEnvironment()
 end
 
 local forceWorldColors
@@ -2182,6 +2942,7 @@ local function applyAmbience()
         return
     end
     if not Config.Ambience then return restoreAmbience() end
+    forceWorldColors()
     scheduleWorldColors()
 end
 local function applyClock()
@@ -2205,28 +2966,26 @@ local function applyLighting()
     end
 end
 local function applyFog()
-    if yieldToWeather() then
-        return
+    -- Atmosphere always wins over weather/game when enabled.
+    if not Config.Fog then
+        return restoreFog()
     end
-    if not Config.Fog then return restoreFog() end
-    local atmosphere = ensureAtmosphere()
-    atmosphere.Density = Config.FogDensity
-    atmosphere.Offset = Config.FogOffset
-    atmosphere.Haze = Config.FogHaze
-    atmosphere.Glare = Config.FogGlare
-    scheduleWorldColors()
+    writeAtmosphereFromConfig()
+    if not yieldToWeather() then
+        forceWorldColors()
+        scheduleWorldColors()
+    end
 end
 local function applyGrade()
-    if yieldToWeather() then
-        return
-    end
     local grade = ensureGrade()
-    grade.Enabled = Config.ColorCorrection
+    grade.Enabled = Config.ColorCorrection == true
     if not Config.ColorCorrection then return restoreGrade() end
     grade.Saturation = Config.Saturation
     grade.Contrast = Config.Contrast
     grade.Brightness = Config.CorrectionBrightness
-    scheduleWorldColors()
+    if typeof(Config.TintColor) == "Color3" then
+        grade.TintColor = Color3.new(Config.TintColor.R, Config.TintColor.G, Config.TintColor.B)
+    end
 end
 
 local function ensureBloom()
@@ -2240,11 +2999,8 @@ local function ensureBloom()
 end
 
 local function applyBloom()
-    if yieldToWeather() then
-        return
-    end
     local bloom = ensureBloom()
-    bloom.Enabled = Config.Bloom
+    bloom.Enabled = Config.Bloom == true
     if not Config.Bloom then return restoreBloom() end
     bloom.Intensity = Config.BloomIntensity
     bloom.Size = Config.BloomSize
@@ -2286,7 +3042,9 @@ local function applySkybox()
         table.insert(Created, SkyInstance)
     end
     for key, value in preset do
-        SkyInstance[key] = value
+        pcall(function()
+            SkyInstance[key] = value
+        end)
     end
 end
 
@@ -2294,10 +3052,15 @@ local function dynamicTarget()
     local hour = Lighting.ClockTime
     local night = hour < 6 or hour > 19
     local dusk = (hour >= 6 and hour < 8) or (hour > 17 and hour <= 19)
-    local base = night and Config.DynamicExposureMax or (dusk and Config.DynamicExposureMax * 0.45 or Config.DynamicExposureMin)
+    local lo = tonumber(Config.DynamicExposureMin) or -0.4
+    local hi = tonumber(Config.DynamicExposureMax) or 0.8
+    if lo > hi then
+        lo, hi = hi, lo
+    end
+    local base = night and hi or (dusk and hi * 0.45 or lo)
     local outdoor = (Config.Ambience and Config.OutdoorAmbient or Lighting.OutdoorAmbient)
     local luma = outdoor.R * 0.3 + outdoor.G * 0.59 + outdoor.B * 0.11
-    return math.clamp(base + (0.5 - luma) * 0.6, Config.DynamicExposureMin, Config.DynamicExposureMax)
+    return math.clamp(base + (0.5 - luma) * 0.6, lo, hi)
 end
 
 local function applyAll()
@@ -2340,47 +3103,28 @@ local function applyCelestial()
     sky.StarCount = Config.RemoveStars and 0 or Original.StarCount
 end
 
-local function forceApplyWorld()
-    if yieldToWeather() then
-        return
-    end
-    if Config.Clock then
-        applyClock()
-    end
-    if Config.Lighting then
-        Lighting.Brightness = Config.Brightness
-        if not Config.DynamicExposure then
-            Lighting.ExposureCompensation = Config.ExposureCompensation
-        end
-    end
-    if Config.Fog then
-        local atmosphere = ensureAtmosphere()
-        atmosphere.Density = Config.FogDensity
-        atmosphere.Offset = Config.FogOffset
-        atmosphere.Haze = Config.FogHaze
-        atmosphere.Glare = Config.FogGlare
-    end
-    if Config.ColorCorrection then
-        local grade = ensureGrade()
-        grade.Enabled = true
-        grade.Saturation = Config.Saturation
-        grade.Contrast = Config.Contrast
-        grade.Brightness = Config.CorrectionBrightness
-    end
-    if Config.Bloom then
-        applyBloom()
-    end
-    if Config.DepthOfField then
-        applyDoF()
-    end
-    if Config.Skybox then
-        applySkybox()
-    end
+local function applyIndependentWorld()
+    applyGrade()
+    applyBloom()
+    applyDoF()
+    applySkybox()
     applyCelestial()
-    scheduleWorldColors()
+end
+
+local function forceApplyWorld()
+    if not yieldToWeather() then
+        applyAmbience()
+        applyClock()
+        applyLighting()
+    end
+    applyFog()
+    applyIndependentWorld()
 end
 
 forceWorldColors = function()
+    if Config.Fog then
+        writeAtmosphereFromConfig()
+    end
     if yieldToWeather() then
         return
     end
@@ -2392,21 +3136,14 @@ forceWorldColors = function()
             Lighting.OutdoorAmbient = Color3.new(Config.OutdoorAmbient.R, Config.OutdoorAmbient.G, Config.OutdoorAmbient.B)
         end
     end
-    if Config.Fog then
-        local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or ensureAtmosphere()
-        if typeof(Config.FogColor) == "Color3" then
-            atmosphere.Color = Color3.new(Config.FogColor.R, Config.FogColor.G, Config.FogColor.B)
-        end
-        if typeof(Config.FogDecay) == "Color3" then
-            atmosphere.Decay = Color3.new(Config.FogDecay.R, Config.FogDecay.G, Config.FogDecay.B)
-        end
-    end
     if Config.ColorCorrection then
         local grade = ensureGrade()
         grade.Enabled = true
         if typeof(Config.TintColor) == "Color3" then
             grade.TintColor = Color3.new(Config.TintColor.R, Config.TintColor.G, Config.TintColor.B)
         end
+    else
+        restoreGrade()
     end
 end
 
@@ -2448,9 +3185,11 @@ local function reapplyAfterSpawn()
 
         if weatherOn then
             yieldToWeather()
+            applyFog()
             task.wait(0.35)
             pinWeatherEnvironment()
             yieldToWeather()
+            applyFog()
             return
         end
         task.wait(0.12)
@@ -2499,13 +3238,22 @@ else
 end
 
 local lastWorldForce = 0
+local lastFogPin = 0
 table.insert(Connections, RunService.Heartbeat:Connect(function()
     local now = os.clock()
+    -- Keep world atmosphere pinned over weather/game every tick while enabled.
+    if Config.Fog and now - lastFogPin >= 0.05 then
+        lastFogPin = now
+        writeAtmosphereFromConfig()
+    end
     if weatherOwnsEnvironment() then
         if now - lastWorldForce >= 2 then
             lastWorldForce = now
             pinWeatherEnvironment()
             yieldToWeather()
+            if Config.Fog then
+                writeAtmosphereFromConfig()
+            end
         end
         return
     end
@@ -2657,14 +3405,17 @@ env.World = {
     SetColor = function(slot, color)
         Config[slot] = color
         if slot == "Ambient" or slot == "OutdoorAmbient" then
-            applyAmbience()
-            if Config.Lighting then
-                applyLighting()
+            if Config.Ambience or Config.Lighting then
+                forceWorldColors()
             end
         elseif slot == "FogColor" or slot == "FogDecay" then
-            applyFog()
+            if Config.Fog then
+                forceWorldColors()
+            end
         elseif slot == "TintColor" then
-            applyGrade()
+            if Config.ColorCorrection then
+                forceWorldColors()
+            end
         end
     end,
     Unload = function()
@@ -2699,1818 +3450,7 @@ env.World = {
 end
 do
 
-local cloneref = cloneref or function(instance)
-    return instance
-end
-local workspace = cloneref(workspace)
-
-local Players = cloneref(game:GetService("Players"))
-local RunService = cloneref(game:GetService("RunService"))
-local UserInputService = cloneref(game:GetService("UserInputService"))
-local GuiService = cloneref(game:GetService("GuiService"))
-
-local Config = {
-
-    Enabled = false,
-    Priority = "Closest to Crosshair",
-    FirePositionScanning = true,
-    FirePositionOffset = 10,
-    HitPositionScanning = true,
-    ConstrainHitPositions = true,
-    Prediction = true,
-    PredictionWindow = 0.12,
-    PredictionIterations = 8,
-    PredictionMaxTime = 5,
-    MaxPredictionSpeed = 150,
-    PredictionResetDistance = 20,
-    HitboxPointScale = 0.35,
-    HitPositionScanMode = "V1",
-    HitPositionOffset = 10,
-    ShootEffects = true,
-    UseFOV = false,
-    FOVRadius = 350,
-    MaxDistance = 1500,
-    MaxTargets = 12,
-    MaxBulletChecks = 40,
-    MaxFrameChecks = 128,
-    ScanBudgetMs = 5,
-    ScanMissCooldown = 0.01,
-    ModuleTimeout = 15,
-
-    Mode = "default",
-    WhitelistFriendlyStatus = true,
-    Targets = {},
-    Friendlies = {},
-
-    Resolver = false,
-    ResolverCooldown = 1.0,
-    ResolverStrength = 4,
-    ResolverHeight = 0.35,
-    ResolverHold = 0.45,
-    ResolverFlash = 0.35,
-
-    AntiAim = false,
-    PitchAmount = 0,
-    YawAmount = 180,
-    PitchType = "static",
-    YawType = "static",
-    PitchWays = 7,
-    YawWays = 7,
-    AASpeed = 6,
-    FakePosition = false,
-    FakePositionDistance = 4,
-    FakePositionHeight = 0,
-    RageVisual = false,
-    ShowScanRange = false,
-    ScanRangeVisual = 80,
-
-    FakeLag = false,
-    FakeLagAmount = 1.2,
-    FakeLagHold = 0.35,
-    FakeLagSmooth = 0.45,
-
-    Indicators = true,
-    IndicatorRagebot = true,
-    IndicatorResolver = true,
-    IndicatorRageActive = Color3.fromRGB(255, 255, 255),
-    IndicatorRageIdle = Color3.fromRGB(255, 255, 255),
-    IndicatorResolverReady = Color3.fromRGB(255, 255, 255),
-    IndicatorResolverCooldown = Color3.fromRGB(180, 180, 190),
-}
-
-local env = getgenv and getgenv() or _G
-if env.RageBot and env.RageBot.Unload then
-    pcall(env.RageBot.Unload)
-end
-if env.Rage and env.Rage.Unload then
-    pcall(env.Rage.Unload)
-end
-
-local LocalPlayer = Players.LocalPlayer
-local PhantomForces = game.PlaceId == 292439477 or game.PlaceId == 299659045
-local Connections = {}
-local Restores = {}
-local Unloaded = false
-local Controller
-local Runtime = { Status = "Starting", LastError = nil, Checks = 0, ScanMisses = 0, Shots = 0 }
-
-local Modules
-if PhantomForces and type(getfflag) == "function" and type(setfflag) == "function" then
-    pcall(function()
-        if tostring(getfflag("DebugRunParallelLuaOnMainThread")):lower() ~= "true" then
-            setfflag("DebugRunParallelLuaOnMainThread", "True")
-        end
-    end)
-end
-
-local moduleNames = {
-    "ScreenCull", "NetworkClient", "ReplicationInterface", "BulletCheck",
-    "CharacterInterface", "GameClock", "PublicSettings", "WeaponControllerInterface",
-    "Effects", "AudioSystem", "HudCrosshairsInterface", "RoundSystemClientFactory", "CameraInterface",
-}
-
-local function usableModules(modules)
-    return type(modules) == "table"
-        and type(modules.NetworkClient) == "table" and type(modules.NetworkClient.send) == "function"
-        and type(modules.ReplicationInterface) == "table"
-        and type(modules.ReplicationInterface.operateOnAllEntries) == "function"
-        and type(modules.WeaponControllerInterface) == "table"
-        and type(modules.WeaponControllerInterface.getActiveWeaponController) == "function"
-        and type(modules.BulletCheck) == "function"
-        and type(modules.PublicSettings) == "table"
-end
-
-local function findModules()
-    if env._TapologyModules and usableModules(env._TapologyModules) then
-        return env._TapologyModules
-    end
-    if shared and type(shared.require) == "function" then
-        local found = {}
-        for _, name in ipairs(moduleNames) do
-            local ok, value = pcall(shared.require, name)
-            if ok then
-                found[name] = value
-            end
-        end
-        if usableModules(found) then
-            return found
-        end
-    end
-    if type(getgc) ~= "function" then
-        return
-    end
-    for _, value in ipairs(getgc(true)) do
-        if type(value) == "table" and rawget(value, "ScreenCull") and rawget(value, "NetworkClient") then
-            local found = {}
-            for name, data in pairs(value) do
-                found[name] = type(data) == "table" and rawget(data, "module") ~= nil and rawget(data, "module") or data
-            end
-            if usableModules(found) then
-                return found
-            end
-        end
-    end
-end
-
-local function number(value, fallback, low, high)
-    value = tonumber(value)
-    if not value or value ~= value then
-        value = fallback
-    end
-    return math.clamp(value, low, high)
-end
-
-local function playerMark(player)
-    local map = env.TapologyPlayerStatus
-    if type(map) ~= "table" or not player then
-        return
-    end
-    return map[tostring(player.UserId)]
-end
-
-local function marked(player)
-    local status = playerMark(player)
-    if status == "ignore" or status == "friendly" then
-        return false
-    end
-    if Config.WhitelistFriendlyStatus and Config.Friendlies[player] then
-        return false
-    end
-    return true
-end
-
-local function isFiniteVec3(v)
-    return typeof(v) == "Vector3"
-        and v.X == v.X and v.Y == v.Y and v.Z == v.Z
-        and math.abs(v.X) < 1e6 and math.abs(v.Y) < 1e6 and math.abs(v.Z) < 1e6
-end
-
-local function characterHash(entry)
-    return entry and entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
-end
-
-local function entryAimPos(entry)
-    local hash = characterHash(entry)
-    if hash and hash.Head and isFiniteVec3(hash.Head.Position) then
-        return hash.Head.Position
-    end
-    return entry._receivedPosition
-end
-
-local function entryHealth(entry)
-    if entry.getHealth then
-        local ok, hp = pcall(entry.getHealth, entry)
-        if ok and type(hp) == "number" then
-            return hp
-        end
-    end
-    if type(entry._health) == "number" then
-        return entry._health
-    end
-    return 100
-end
-
-local function priorityScore(entry, origin, camera, mouse)
-    local position = entryAimPos(entry)
-    if not isFiniteVec3(position) then
-        return math.huge
-    end
-    local distance = (position - origin).Magnitude
-    if distance > number(Config.MaxDistance, 1500, 1, 10000) then
-        return math.huge
-    end
-    local screenScore
-    if camera then
-        local screen, onScreen = camera:WorldToViewportPoint(position)
-        if onScreen and screen.Z > 0 then
-            local dx, dy = screen.X - mouse.X, screen.Y - mouse.Y
-            screenScore = dx * dx + dy * dy
-        end
-    end
-    if Config.UseFOV then
-        local radius = number(Config.FOVRadius, 350, 1, 5000)
-        if not screenScore or screenScore > radius * radius then
-            return math.huge
-        end
-    end
-    if Config.Priority == "Closest to Local" then
-        return distance
-    end
-    if Config.Priority == "Lowest Health" then
-        return entryHealth(entry) + distance * 0.001
-    end
-    return screenScore or (1e9 + distance)
-end
-
-local frameCheckBudget, frameCheckDeadline = 0, 0
-local ScanStates = setmetatable({}, { __mode = "k" })
-
-local function getClosestPlayers(origin)
-    local ordered = {}
-    if not (Modules and Modules.ReplicationInterface) then
-        return ordered
-    end
-    local camera = workspace.CurrentCamera
-    local mouse = UserInputService:GetMouseLocation()
-    local okInset, inset = pcall(GuiService.GetGuiInset, GuiService)
-    if okInset then
-        mouse = mouse - inset
-    end
-    local scored = {}
-    local ok, reason = pcall(Modules.ReplicationInterface.operateOnAllEntries, function(player, entry)
-        local hash = characterHash(entry)
-        if not player or not player.Parent or not entry._isEnemy or not hash or not hash.Head or not marked(player) then
-            return
-        end
-        if entryHealth(entry) <= 0 then
-            return
-        end
-        local score = priorityScore(entry, origin, camera, mouse)
-        if score ~= score or score == math.huge then
-            return
-        end
-        scored[#scored + 1] = {
-            entry = entry,
-            score = score,
-            selected = Config.Targets[player] == true or playerMark(player) == "prioritize",
-            id = player.UserId or 0,
-        }
-    end)
-    if not ok then
-        Runtime.LastError = tostring(reason)
-        return ordered
-    end
-    table.sort(scored, function(a, b)
-        if a.selected ~= b.selected then
-            return a.selected
-        end
-        if a.score == b.score then
-            return a.id < b.id
-        end
-        return a.score < b.score
-    end)
-    for index = 1, math.min(#scored, number(Config.MaxTargets, 12, 1, 12)) do
-        ordered[index] = scored[index].entry
-    end
-    return ordered
-end
-
-local function trajectory(origin, acceleration, target, speed)
-    if not isFiniteVec3(origin) or not isFiniteVec3(acceleration) or not isFiniteVec3(target)
-        or type(speed) ~= "number" or speed ~= speed or speed <= 0 or speed == math.huge
-    then
-        return
-    end
-    local delta = target - origin
-    local distanceSquared = delta:Dot(delta)
-    if distanceSquared < 1e-8 then
-        return
-    end
-    local a = acceleration:Dot(acceleration) * 0.25
-    if a < 1e-12 then
-        return delta.Unit * speed, math.sqrt(distanceSquared) / speed
-    end
-    local b = -(delta:Dot(acceleration) + speed * speed)
-    local discriminant = b * b - 4 * a * distanceSquared
-    if discriminant < 0 then
-        return
-    end
-    local root = math.sqrt(discriminant)
-    local q = -0.5 * (b + (b >= 0 and root or -root))
-    local first = q / a
-    local second = q ~= 0 and distanceSquared / q or math.huge
-    local timeSquared = math.min(first > 0 and first or math.huge, second > 0 and second or math.huge)
-    if timeSquared == math.huge then
-        return
-    end
-    local flightTime = math.sqrt(timeSquared)
-    if flightTime <= 0 then
-        return
-    end
-    local velocity = (delta - acceleration * (0.5 * timeSquared)) / flightTime
-    if isFiniteVec3(velocity) then
-        return velocity, flightTime
-    end
-end
-
-local MotionStates = setmetatable({}, { __mode = "k" })
-
-local function sampleMotion()
-    local interface = Modules and Modules.ReplicationInterface
-    if not interface then
-        return
-    end
-    local now = os.clock()
-    interface.operateOnAllEntries(function(_, entry)
-        local hash = characterHash(entry)
-        local head = hash and hash.Head
-        if not head or not head.Parent or not entry._isEnemy or entryHealth(entry) <= 0 then
-            MotionStates[entry] = nil
-            return
-        end
-        local root = hash.Torso or hash.UpperTorso or head
-        if not root.Parent then
-            root = head
-        end
-        local position = root.Position
-        if not isFiniteVec3(position) then
-            return
-        end
-        local state = MotionStates[entry]
-        local jumpLimit = number(Config.PredictionResetDistance, 20, 2, 100)
-        if not state or state.Head ~= head or (position - state.Position).Magnitude > jumpLimit then
-            state = {
-                Head = head,
-                Position = position,
-                Samples = {},
-                Velocity = Vector3.zero,
-                ResetAt = state and now or nil,
-            }
-            MotionStates[entry] = state
-        end
-        local samples = state.Samples
-        local last = samples[#samples]
-        if last and now - last.Time < 0.005 then
-            return
-        end
-        samples[#samples + 1] = { Time = now, Position = position }
-        state.Position = position
-        local window = number(Config.PredictionWindow, 0.12, 0.03, 0.3)
-        while #samples > 2 and now - samples[1].Time > window do
-            table.remove(samples, 1)
-        end
-        local count = #samples
-        if count < 2 or now - samples[1].Time < 0.015 then
-            return
-        end
-        local sumTime, sumTimeSquared = 0, 0
-        local sumPosition, sumWeighted = Vector3.zero, Vector3.zero
-        for _, sample in ipairs(samples) do
-            local time = sample.Time - now
-            local displacement = sample.Position - position
-            sumTime = sumTime + time
-            sumTimeSquared = sumTimeSquared + time * time
-            sumPosition = sumPosition + displacement
-            sumWeighted = sumWeighted + displacement * time
-        end
-        local denominator = count * sumTimeSquared - sumTime * sumTime
-        if denominator <= 1e-10 then
-            return
-        end
-        local velocity = (sumWeighted * count - sumPosition * sumTime) / denominator
-        local maximum = number(Config.MaxPredictionSpeed, 150, 1, 500)
-        if isFiniteVec3(velocity) and velocity.Magnitude <= maximum then
-            state.Velocity = velocity.Magnitude < 0.5 and Vector3.zero or velocity
-            state.UpdatedAt = now
-        else
-            state.Samples = { { Time = now, Position = position } }
-            state.Velocity = Vector3.zero
-            state.UpdatedAt = now
-        end
-    end)
-end
-
-local function targetVelocity(entry)
-    if Config.Prediction == false then
-        return Vector3.zero
-    end
-    local state = entry and MotionStates[entry]
-    if state and state.ResetAt and not state.UpdatedAt and os.clock() - state.ResetAt < 0.15 then
-        return Vector3.zero
-    end
-    if state and state.UpdatedAt and os.clock() - state.UpdatedAt < 0.15 then
-        return state.Velocity
-    end
-    local velocity = entry and entry._velspring and entry._velspring.t
-    if isFiniteVec3(velocity) and velocity.Magnitude <= number(Config.MaxPredictionSpeed, 150, 1, 500) then
-        return velocity
-    end
-    return Vector3.zero
-end
-
-local scanVerticesV1 = {
-    Vector3.new(0, 0, -1),
-    Vector3.new(0, -1, 0),
-    Vector3.new(-1, 0, 0),
-    Vector3.new(0, 1, 0),
-    Vector3.new(1, 0, 0),
-    Vector3.new(0, 0, 1),
-}
-
-local scanVerticesV2 = {
-    Vector3.new(1, 0, 0),
-    Vector3.new(-1, 0, 0),
-    Vector3.new(0, 1, 0),
-    Vector3.new(0, -1, 0),
-    Vector3.new(0, 0, 1),
-    Vector3.new(0, 0, -1),
-    Vector3.new(0.707, 0.707, 0),
-    Vector3.new(0.707, -0.707, 0),
-    Vector3.new(-0.707, 0.707, 0),
-    Vector3.new(-0.707, -0.707, 0),
-    Vector3.new(0.707, 0, 0.707),
-    Vector3.new(0.707, 0, -0.707),
-    Vector3.new(-0.707, 0, 0.707),
-    Vector3.new(-0.707, 0, -0.707),
-}
-
-local function getPositionOffsets(origin, target, offset, mode)
-    mode = mode == "V2" and "V2" or "V1"
-    local maxOffset = mode == "V2" and 28 or 16
-    offset = number(offset, 0, 0, maxOffset)
-    if offset < 0.001 or (target - origin).Magnitude < 0.001 then
-        return { origin }
-    end
-    local look = CFrame.new(origin, target)
-    local offsets = {}
-
-    local function push(point)
-        if isFiniteVec3(point) then
-            offsets[#offsets + 1] = point
-        end
-    end
-
-    if mode == "V1" then
-        local cframe = look
-        for _, vertex in scanVerticesV1 do
-            push(cframe * (vertex * offset))
-        end
-    else
-        for _, scale in { 0.55, 1 } do
-            local radius = offset * scale
-            for _, vertex in scanVerticesV2 do
-                push(look * (vertex * radius))
-            end
-        end
-    end
-
-    if #offsets == 0 then
-        return { origin }
-    end
-    return offsets
-end
-
-local function interceptTrajectory(origin, acceleration, target, speed, movement)
-    if not isFiniteVec3(movement) then
-        movement = Vector3.zero
-    end
-    local velocity, time = trajectory(origin, acceleration, target, speed)
-    if not velocity then
-        return
-    end
-    local lifetime = Modules and Modules.PublicSettings and Modules.PublicSettings.bulletLifeTime
-    local limit = type(lifetime) == "number" and lifetime > 0 and lifetime or number(Config.PredictionMaxTime, 5, 0.1, 20)
-    if time > limit then
-        return
-    end
-    if movement.Magnitude < 0.001 then
-        return velocity, time, target
-    end
-    local iterations = math.floor(number(Config.PredictionIterations, 8, 3, 16))
-    for _ = 1, iterations do
-        local predicted = target + movement * time
-        velocity, time = trajectory(origin, acceleration, predicted, speed)
-        if not velocity or time > limit then
-            return
-        end
-        local destination = target + movement * time
-        local impact = origin + velocity * time + acceleration * (0.5 * time * time)
-        if (impact - destination).Magnitude <= 0.01
-            and math.abs(velocity.Magnitude - speed) <= math.max(0.001, speed * 0.00001)
-        then
-            return velocity, time, destination
-        end
-    end
-end
-
-local function headScanPoints(entry, fallback, origin)
-    local hash = entry and characterHash(entry)
-    local head = hash and hash.Head
-    if not Config.ConstrainHitPositions or not head or not head.Parent then
-        return getPositionOffsets(fallback, origin, Config.HitPositionOffset, Config.HitPositionScanMode)
-    end
-    local scale = number(Config.HitboxPointScale, 0.35, 0.05, 0.45)
-    local offset = number(Config.HitPositionOffset, 10, 0, 28)
-    local extent = head.Size * scale
-    extent = Vector3.new(math.min(extent.X, offset), math.min(extent.Y, offset), math.min(extent.Z, offset))
-    local vertices = {
-        Vector3.new(1, 0, 0),
-        Vector3.new(-1, 0, 0),
-        Vector3.new(0, 1, 0),
-        Vector3.new(0, -1, 0),
-        Vector3.new(0, 0, 1),
-        Vector3.new(0, 0, -1),
-    }
-    if Config.HitPositionScanMode == "V2" then
-        for x = -1, 1, 2 do
-            for y = -1, 1, 2 do
-                for z = -1, 1, 2 do
-                    vertices[#vertices + 1] = Vector3.new(x, y, z)
-                end
-            end
-        end
-    end
-    local points = {}
-    for _, vertex in ipairs(vertices) do
-        points[#points + 1] = head.CFrame:PointToWorldSpace(
-            Vector3.new(vertex.X * extent.X, vertex.Y * extent.Y, vertex.Z * extent.Z)
-        )
-    end
-    return points
-end
-
-local function tryBulletPath(bulletCheck, origin, target, acceleration, speed, penetration, movement)
-    local velocity, flightTime, predicted = interceptTrajectory(origin, acceleration, target, speed, movement)
-    if not velocity then
-        return false, false, nil, nil
-    end
-    local ok, result = pcall(bulletCheck, origin, predicted, velocity, acceleration, penetration, 1 / 50)
-    return true, ok and result and true or false, velocity, flightTime, predicted
-end
-
-local function edgePeekPoints(origin, target, reach)
-    local points = {}
-    if not (isFiniteVec3(origin) and isFiniteVec3(target)) then
-        return points
-    end
-    reach = number(reach, 10, 0.25, 12)
-    local delta = target - origin
-    local dist = delta.Magnitude
-    if dist < 1.5 then
-        return points
-    end
-    local dir = delta.Unit
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local ignore = {}
-    if LocalPlayer.Character then
-        ignore[#ignore + 1] = LocalPlayer.Character
-    end
-    local interface = Modules and Modules.ReplicationInterface
-    if interface then
-        pcall(interface.operateOnAllEntries, function(_, entry)
-            local hash = characterHash(entry)
-            local head = hash and hash.Head
-            if head and head.Parent then
-                ignore[#ignore + 1] = head.Parent
-            end
-        end)
-    end
-    params.FilterDescendantsInstances = ignore
-    local hit = workspace:Raycast(origin, dir * (dist - 0.75), params)
-    if not hit then
-        return points
-    end
-    local normal = hit.Normal
-    if normal.Magnitude < 1e-4 then
-        return points
-    end
-    normal = normal.Unit
-    local right = dir:Cross(Vector3.yAxis)
-    if right.Magnitude < 1e-3 then
-        right = dir:Cross(Vector3.xAxis)
-    end
-    right = right.Unit
-    local up = right:Cross(dir)
-    if up.Magnitude < 1e-3 then
-        up = Vector3.yAxis
-    else
-        up = up.Unit
-    end
-    local axes = {
-        right, -right, up, -up,
-        (right + up).Unit, (right - up).Unit,
-        (-right + up).Unit, (-right - up).Unit,
-    }
-    local function cap(point)
-        local offset = point - origin
-        if offset.Magnitude > reach then
-            return origin + offset.Unit * reach
-        end
-        return point
-    end
-    local function push(point)
-        if not isFiniteVec3(point) or #points >= 10 then
-            return
-        end
-        point = cap(point)
-        for _, existing in ipairs(points) do
-            if (existing - point).Magnitude < 0.2 then
-                return
-            end
-        end
-        points[#points + 1] = point
-    end
-    for _, axis in ipairs(axes) do
-        if #points >= 10 then
-            break
-        end
-        local best
-        local lo, hi = 0.2, reach
-        for _ = 1, 4 do
-            local mid = (lo + hi) * 0.5
-            local candidate = cap(origin + axis * mid + normal * 0.35)
-            local toTarget = target - candidate
-            local blocked = toTarget.Magnitude > 0.5 and workspace:Raycast(candidate, toTarget, params)
-            local clear = not blocked or (blocked.Position - target).Magnitude < 3
-            if clear then
-                best = candidate
-                hi = mid
-            else
-                lo = mid
-            end
-        end
-        if best then
-            push(best)
-        end
-    end
-    return points
-end
-
-local function headEdgePoints(entry, origin, target)
-    local hash = entry and characterHash(entry)
-    local head = hash and hash.Head
-    local points = {}
-    if not (head and head.Parent and isFiniteVec3(target)) then
-        return points
-    end
-    local reach = number(Config.HitPositionOffset, 10, 0, 12)
-    local scale = number(Config.HitboxPointScale, 0.35, 0.05, 0.45)
-    local extent = head.Size * scale
-    local toUs = origin - target
-    if toUs.Magnitude < 1e-3 then
-        return points
-    end
-    toUs = toUs.Unit
-    local right = toUs:Cross(Vector3.yAxis)
-    if right.Magnitude < 1e-3 then
-        right = Vector3.xAxis
-    else
-        right = right.Unit
-    end
-
-    local bias = {
-        toUs,
-        (toUs + right).Unit,
-        (toUs - right).Unit,
-        (toUs + Vector3.yAxis).Unit,
-        (toUs * 0.6 + right).Unit,
-    }
-    for _, dir in ipairs(bias) do
-        local localDir = head.CFrame:VectorToObjectSpace(dir)
-        local corner = Vector3.new(
-            math.clamp(localDir.X, -1, 1) * math.min(extent.X, reach),
-            math.clamp(localDir.Y, -1, 1) * math.min(extent.Y, reach),
-            math.clamp(localDir.Z, -1, 1) * math.min(extent.Z, reach)
-        )
-        local point = head.CFrame:PointToWorldSpace(corner)
-        if isFiniteVec3(point) then
-            points[#points + 1] = point
-        end
-    end
-    return points
-end
-
-local function scanPositions(origin, target, acceleration, speed, penetration, entry)
-    if not isFiniteVec3(origin) or not isFiniteVec3(target) or not isFiniteVec3(acceleration)
-        or type(speed) ~= "number" or speed ~= speed or speed <= 0
-    then
-        return
-    end
-    local bulletCheck = Modules and Modules.BulletCheck
-    if type(bulletCheck) ~= "function" then
-        return
-    end
-    local movement = targetVelocity(entry)
-    local checks = 0
-    local limit = number(Config.MaxBulletChecks, 10, 1, 128)
-    local function canProbe()
-        return checks < limit and frameCheckBudget > 0 and os.clock() < frameCheckDeadline
-    end
-    local function probe(newOrigin, newTarget)
-        checks = checks + 1
-        frameCheckBudget = frameCheckBudget - 1
-        Runtime.Checks = Runtime.Checks + 1
-        local _, hit, velocity, flightTime, predicted =
-            tryBulletPath(bulletCheck, newOrigin, newTarget, acceleration, speed, penetration, movement)
-        if hit then
-            return newOrigin, predicted, velocity, flightTime
-        end
-    end
-    if not canProbe() then
-        return
-    end
-    local o, t, v, flightTime = probe(origin, target)
-    if o then
-        return o, t, v, flightTime
-    end
-    local origins, targets = { origin }, { target }
-    local function append(list, points)
-        for _, point in ipairs(points) do
-            local unique = true
-            for _, existing in ipairs(list) do
-                if (point - existing).Magnitude < 0.001 then
-                    unique = false
-                    break
-                end
-            end
-            if unique then
-                list[#list + 1] = point
-            end
-        end
-    end
-    local edgeMode = Config.Mode == "edge"
-    if edgeMode and Config.FirePositionScanning then
-        local slot = entry and ScanStates[entry]
-        local reach = number(Config.FirePositionOffset, 10, 0, 12)
-        local peeked
-        if slot and slot.edgePoints and slot.edgeReach == reach and os.clock() - (slot.edgeAt or 0) < 0.12 then
-            peeked = slot.edgePoints
-        else
-            peeked = edgePeekPoints(origin, target, reach)
-            if entry then
-                slot = slot or { cursor = 1 }
-                slot.edgePoints = peeked
-                slot.edgeAt = os.clock()
-                slot.edgeReach = reach
-                ScanStates[entry] = slot
-            end
-        end
-        append(origins, peeked)
-    end
-    if Config.FirePositionScanning and not edgeMode then
-        append(origins, getPositionOffsets(origin, target, Config.FirePositionOffset, "V1"))
-    elseif Config.FirePositionScanning and edgeMode then
-
-        append(origins, getPositionOffsets(origin, target, math.min(Config.FirePositionOffset, 6), "V1"))
-    end
-    if edgeMode and Config.HitPositionScanning then
-        append(targets, headEdgePoints(entry, origin, target))
-    end
-    if Config.HitPositionScanning and not edgeMode then
-        append(targets, headScanPoints(entry, target, origin))
-    end
-    local paths = {}
-    for index = 2, #origins do
-        paths[#paths + 1] = { origins[index], target }
-    end
-    for index = 2, #targets do
-        paths[#paths + 1] = { origin, targets[index] }
-    end
-    for first = 2, #origins do
-        for second = 2, #targets do
-            paths[#paths + 1] = { origins[first], targets[second] }
-        end
-    end
-    if #paths == 0 then
-        return
-    end
-    local saved = entry and ScanStates[entry] or nil
-    local key = tostring(Config.Mode)
-        .. ":"
-        .. tostring(Config.FirePositionScanning)
-        .. ":"
-        .. tostring(Config.FirePositionOffset)
-        .. ":"
-        .. tostring(Config.HitPositionScanning)
-        .. ":"
-        .. tostring(Config.HitPositionOffset)
-        .. ":"
-        .. tostring(Config.HitPositionScanMode)
-    if not saved or saved.key ~= key then
-        local carried = saved
-        saved = { cursor = 1, key = key }
-        if carried then
-            saved.edgePoints = carried.edgePoints
-            saved.edgeAt = carried.edgeAt
-            saved.edgeReach = carried.edgeReach
-        end
-        if entry then
-            ScanStates[entry] = saved
-        end
-    end
-    local cursor = saved.cursor
-    for visited = 0, #paths - 1 do
-        if not canProbe() then
-            break
-        end
-        local index = 1 + (cursor - 1 + visited) % #paths
-        saved.cursor = 1 + index % #paths
-        local path = paths[index]
-        o, t, v, flightTime = probe(path[1], path[2])
-        if o then
-            return o, t, v, flightTime
-        end
-    end
-end
-
-local function targetDistance(entry, origin)
-    local aim = entry and entryAimPos(entry)
-    if not (isFiniteVec3(aim) and isFiniteVec3(origin)) then
-        return nil
-    end
-    return math.floor((aim - origin).Magnitude + 0.5)
-end
-
-local function fireDelayForWeapon(data, weapon)
-    local rpm = tonumber(data and data.firerate) or 600
-    if type(data and data.firerate) == "table" then
-        local index = weapon and weapon._firemodeIndex or 1
-        rpm = tonumber(data.firerate[index]) or tonumber(data.firerate[1]) or rpm
-    end
-    if weapon and weapon._aiming and data and data.aimedfirerate then
-        rpm = tonumber(data.aimedfirerate) or rpm
-    end
-    rpm = math.clamp(rpm, 60, 3000)
-    return 60 / rpm
-end
-
-local PendingHits = {}
-local ticket = 0
-local nextShot = 0
-local lastOrigin
-local realOrigin
-local originUpdatedAt = -math.huge
-
-local function fallbackOrigin()
-    if os.clock() - originUpdatedAt <= 0.25 and isFiniteVec3(lastOrigin) then
-        return lastOrigin
-    end
-    if os.clock() - originUpdatedAt <= 0.25 and isFiniteVec3(realOrigin) then
-        return realOrigin
-    end
-    local charInterface = Modules and Modules.CharacterInterface
-    local object = charInterface and charInterface.getCharacterObject and charInterface.getCharacterObject()
-    local root = object and object.getRootPart and object:getRootPart()
-    if root and isFiniteVec3(root.Position) then
-        return root.Position
-    end
-    local cam = workspace.CurrentCamera
-    return cam and cam.CFrame.Position or nil
-end
-
-local function gameTime()
-    local clock = Modules and Modules.GameClock
-    if clock and type(clock.getTime) == "function" then
-        local ok, t = pcall(clock.getTime)
-        if ok and type(t) == "number" then
-            return t
-        end
-    end
-    local network = Modules and Modules.NetworkClient
-    if network and type(network.getTime) == "function" then
-        local ok, t = pcall(network.getTime)
-        if ok and type(t) == "number" then
-            return t
-        end
-    end
-    return nil
-end
-
-local function nextBulletTicket(weapon)
-    ticket += 1
-    if weapon and debug and debug.getupvalue and debug.setupvalue and type(weapon.fireRound) == "function" then
-        local ok, current = pcall(debug.getupvalue, weapon.fireRound, 11)
-        if ok and type(current) == "number" then
-            ticket = math.max(ticket, current + 1)
-            pcall(debug.setupvalue, weapon.fireRound, 11, ticket)
-        end
-    end
-    return ticket
-end
-
-local halfPi = math.pi * 0.5
-local function wrapYaw(y)
-    local pi = math.pi
-    local tau = pi * 2
-    y = y % tau
-    if y < 0 then
-        y += tau
-    end
-    return y - pi
-end
-
-local function aaWave(kind, amount, ways)
-    local speed = number(Config.AASpeed, 6, 0.5, 20)
-    local t = os.clock() * speed
-    if kind == "sine" then
-        return amount * math.sin(t)
-    elseif kind == "jitter" then
-        return (math.floor(t * 2) % 2 == 0 and 1 or -1) * amount
-    elseif kind == "ways" then
-        local count = math.clamp(math.floor(tonumber(ways) or 7), 2, 10)
-        local step = math.floor(t) % count
-        if count <= 1 then
-            return 0
-        end
-        return -amount + (2 * amount) * (step / (count - 1))
-    elseif kind == "180" then
-        return (math.floor(t) % 2 == 0 and 1 or -1) * amount
-    end
-    return amount
-end
-
-local function applyAAAngles(angles)
-    if typeof(angles) ~= "Vector3" or not isFiniteVec3(angles) then
-        return angles
-    end
-    if not Config.AntiAim then
-        return angles
-    end
-    local pitchKind = Config.PitchType or "static"
-    local yawKind = Config.YawType or "static"
-    local pitch = pitchKind == "static" and math.rad(number(Config.PitchAmount, 0, -89, 89))
-        or aaWave(pitchKind, math.rad(number(Config.PitchAmount, 0, -89, 89)), Config.PitchWays)
-    local yaw = yawKind == "static" and math.rad(number(Config.YawAmount, 180, -180, 180))
-        or aaWave(yawKind, math.rad(number(Config.YawAmount, 180, -180, 180)), Config.YawWays)
-    local x = math.clamp(angles.X + pitch, -halfPi, halfPi)
-    local y = wrapYaw(angles.Y + yaw)
-    return Vector3.new(x, y, 0)
-end
-
-local function applyFakePosition(position)
-    if not Config.FakePosition or not isFiniteVec3(position) then
-        return position
-    end
-    local cam = workspace.CurrentCamera
-    local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
-    local flat = Vector3.new(look.X, 0, look.Z)
-    if flat.Magnitude < 0.05 then
-        flat = Vector3.new(0, 0, -1)
-    else
-        flat = flat.Unit
-    end
-    local dist = number(Config.FakePositionDistance, 4, 0, 14)
-    local height = number(Config.FakePositionHeight, 0, -6, 6)
-    local shifted = position + flat * dist + Vector3.new(0, height, 0)
-    return isFiniteVec3(shifted) and shifted or position
-end
-
-local FAKE_LAG_HARD_CAP = 2.8
-local fakeLag = {
-    lastRefreshTime = 0,
-    lastSentPosition = nil,
-    heldUntil = 0,
-}
-
-local function applyFakeLag(position)
-    if not isFiniteVec3(position) then
-        return position
-    end
-    local now = os.clock()
-    local amount = number(Config.FakeLagAmount, 1.2, 0, FAKE_LAG_HARD_CAP)
-    local hold = number(Config.FakeLagHold, 0.35, 0.05, 3)
-    local smooth = number(Config.FakeLagSmooth, 0.45, 0, 1)
-
-    if not fakeLag.lastSentPosition then
-        fakeLag.lastSentPosition = position
-        fakeLag.lastRefreshTime = now
-        fakeLag.heldUntil = now + hold
-        return position
-    end
-
-    if now < fakeLag.heldUntil then
-        local held = fakeLag.lastSentPosition
-        local delta = held - position
-        if delta.Magnitude > amount then
-            held = position + delta.Unit * amount
-        end
-        fakeLag.lastSentPosition = held
-        return held
-    end
-
-    local yaw = math.random() * math.pi * 2
-    local candidate = position + Vector3.new(math.cos(yaw) * amount, 0, math.sin(yaw) * amount)
-    if smooth < 1 then
-        candidate = fakeLag.lastSentPosition:Lerp(candidate, smooth)
-    end
-    local fromReal = candidate - position
-    if fromReal.Magnitude > amount then
-        candidate = position + fromReal.Unit * amount
-    end
-    local fromLast = candidate - fakeLag.lastSentPosition
-    local jumpCap = math.min(amount, FAKE_LAG_HARD_CAP)
-    if fromLast.Magnitude > jumpCap and fromLast.Magnitude > 1e-4 then
-        candidate = fakeLag.lastSentPosition + fromLast.Unit * jumpCap
-    end
-    fakeLag.lastSentPosition = candidate
-    fakeLag.lastRefreshTime = now
-    fakeLag.heldUntil = now + hold
-    return candidate
-end
-
-local resolverState = {
-    phase = "cooldown",
-    cycleStart = 0,
-    flashUntil = 0,
-    holdUntil = 0,
-    entry = nil,
-    offset = Vector3.zero,
-    worldPoint = nil,
-    name = nil,
-    bases = setmetatable({}, { __mode = "k" }),
-}
-
-local function captureBases(entry)
-    local hash = characterHash(entry)
-    if not hash then
-        return
-    end
-    local bases = resolverState.bases[entry]
-    if not bases then
-        bases = {}
-        resolverState.bases[entry] = bases
-    end
-    for name, part in pairs(hash) do
-        if typeof(part) == "Instance" and part:IsA("BasePart") then
-            bases[name] = part.CFrame
-        end
-    end
-end
-
-local function clearRelocate(entry)
-    if not entry then
-        return
-    end
-    local bases = resolverState.bases[entry]
-    local hash = characterHash(entry)
-    if bases and hash then
-        for name, cf in pairs(bases) do
-            local part = hash[name]
-            if typeof(part) == "Instance" and part:IsA("BasePart") and part.Parent and typeof(cf) == "CFrame" then
-                pcall(function()
-                    part.CFrame = cf
-                end)
-            end
-        end
-    end
-    resolverState.bases[entry] = nil
-end
-
-local function applyRelocate(entry, worldPoint)
-    if not (entry and isFiniteVec3(worldPoint)) then
-        return false
-    end
-    local hash = characterHash(entry)
-    local head = hash and hash.Head
-    if not (head and head.Parent and isFiniteVec3(head.Position)) then
-        return false
-    end
-    local delta = worldPoint - head.Position
-    if delta.Magnitude < 1e-4 then
-        return true
-    end
-    for _, part in pairs(hash) do
-        if typeof(part) == "Instance" and part:IsA("BasePart") and part.Parent then
-            pcall(function()
-                part.CFrame = part.CFrame + delta
-            end)
-        end
-    end
-    return true
-end
-
-local function findOrbitResolvePoint(origin, entry, accel, speed, penetration)
-    local aim = entryAimPos(entry) or entry._receivedPosition
-    if not isFiniteVec3(aim) then
-        return nil
-    end
-    local vel = targetVelocity(entry)
-    local predicted = aim + vel * 0.12
-    local height = number(Config.ResolverHeight, 0.35, -2, 3)
-    predicted = predicted + Vector3.new(0, height, 0)
-    local strength = number(Config.ResolverStrength, 4, 0.5, 10)
-    local bulletCheck = Modules and Modules.BulletCheck
-    local movement = vel
-    local candidates = {}
-
-    for _, point in ipairs(edgePeekPoints(origin, predicted, math.min(strength, 10))) do
-        candidates[#candidates + 1] = point
-    end
-    candidates[#candidates + 1] = predicted
-    for i = 0, 7 do
-        local a = (i / 8) * math.pi * 2
-        candidates[#candidates + 1] = predicted
-            + Vector3.new(math.cos(a) * strength, 0, math.sin(a) * strength)
-    end
-    for i = 0, 7 do
-        local a = (i / 8) * math.pi * 2 + 0.4
-        candidates[#candidates + 1] = predicted
-            + Vector3.new(math.cos(a) * strength * 0.55, height * 0.5, math.sin(a) * strength * 0.55)
-    end
-    if type(bulletCheck) == "function" and isFiniteVec3(origin) and accel and speed and penetration then
-        for _, point in ipairs(candidates) do
-            local _, hit = tryBulletPath(bulletCheck, origin, point, accel, speed, penetration, movement)
-            if hit then
-                return point
-            end
-        end
-    end
-    return candidates[2] or predicted
-end
-
-local function resolverCooldownLeft()
-    if resolverState.phase == "resolved" then
-        return 0
-    end
-    local cool = number(Config.ResolverCooldown, 1, 0.1, 5)
-    local elapsed = os.clock() - (resolverState.cycleStart or 0)
-    return math.max(0, cool - elapsed)
-end
-
-local function resolverTick(origin, accel, speed, penetration)
-    if not Config.Resolver then
-        if resolverState.entry then
-            clearRelocate(resolverState.entry)
-            resolverState.entry = nil
-        end
-        resolverState.phase = "cooldown"
-        return
-    end
-    local now = os.clock()
-    local flash = number(Config.ResolverFlash, 0.35, 0.1, 1.5)
-    local hold = number(Config.ResolverHold, 0.45, 0.1, 3)
-
-    if resolverState.cycleStart <= 0 then
-        resolverState.cycleStart = now
-        resolverState.phase = "cooldown"
-    end
-
-    if resolverState.entry then
-        if now <= resolverState.holdUntil then
-            local received = resolverState.entry._receivedPosition
-            if isFiniteVec3(received) and isFiniteVec3(resolverState.offset) then
-                resolverState.worldPoint = received + resolverState.offset
-            end
-            if isFiniteVec3(resolverState.worldPoint) then
-                applyRelocate(resolverState.entry, resolverState.worldPoint)
-            end
-        else
-            clearRelocate(resolverState.entry)
-            resolverState.entry = nil
-            resolverState.worldPoint = nil
-        end
-    end
-
-    if resolverState.phase == "resolved" then
-        if now >= resolverState.flashUntil then
-            resolverState.phase = "cooldown"
-            resolverState.cycleStart = now
-        end
-        return
-    end
-
-    if resolverCooldownLeft() > 0.001 then
-        return
-    end
-
-    local closest = isFiniteVec3(origin) and getClosestPlayers(origin) or {}
-    local entry = closest and closest[1]
-    local point = entry and findOrbitResolvePoint(origin, entry, accel, speed, penetration)
-    if entry and isFiniteVec3(point) then
-        captureBases(entry)
-        local received = entry._receivedPosition
-        resolverState.offset = isFiniteVec3(received) and (point - received) or Vector3.zero
-        resolverState.worldPoint = point
-        applyRelocate(entry, point)
-        resolverState.entry = entry
-        resolverState.name = entry._player and entry._player.Name or "target"
-    else
-        resolverState.entry = nil
-        resolverState.worldPoint = nil
-        resolverState.name = nil
-    end
-    resolverState.phase = "resolved"
-    resolverState.flashUntil = now + flash
-    resolverState.holdUntil = now + hold
-end
-
-local function startModules()
-    local network = Modules.NetworkClient
-    local settings = Modules.PublicSettings
-    local weapons = Modules.WeaponControllerInterface
-    local effects = Modules.Effects
-    local audio = Modules.AudioSystem
-    local crosshairs = Modules.HudCrosshairsInterface
-    local roundSystem = Modules.RoundSystemClientFactory
-        and Modules.RoundSystemClientFactory.getClientRoundSystem
-        and Modules.RoundSystemClientFactory.getClientRoundSystem()
-    local cameraInterface = Modules.CameraInterface
-
-    if network and type(network.send) == "function" then
-        local send = network.send
-        local wrapper = function(self, name, ...)
-            if name == "repupdate" then
-                local position, angles = ...
-                if isFiniteVec3(position) then
-                    originUpdatedAt = os.clock()
-                    realOrigin = position
-                    lastOrigin = position
-                end
-
-                if Config.AntiAim or Config.FakeLag or Config.FakePosition then
-                    if Config.FakePosition and isFiniteVec3(position) then
-                        position = applyFakePosition(position)
-                    end
-                    if Config.FakeLag and isFiniteVec3(position) then
-                        position = applyFakeLag(position)
-                    else
-                        fakeLag.lastSentPosition = nil
-                        fakeLag.heldUntil = 0
-                    end
-                    if Config.AntiAim then
-                        angles = applyAAAngles(typeof(angles) == "Vector3" and angles or Vector3.zero)
-                    end
-                    return send(self, name, position, angles, select(3, ...))
-                end
-            end
-            return send(self, name, ...)
-        end
-        network.send = wrapper
-        table.insert(Restores, function()
-            if network.send == wrapper then
-                network.send = send
-            end
-        end)
-
-        table.insert(Connections, RunService.Heartbeat:Connect(function()
-            if Unloaded or not Config.Enabled or Config.Prediction == false then
-                return
-            end
-            local ok, reason = pcall(sampleMotion)
-            if not ok then
-                Runtime.LastError = tostring(reason)
-            end
-        end))
-
-        table.insert(Connections, RunService.Heartbeat:Connect(function()
-            if Unloaded then
-                return
-            end
-            local origin = fallbackOrigin()
-            local accel = settings and settings.bulletAcceleration
-            local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
-            local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
-            local data = weapon and weapon._weaponData
-            local speed = data and data.bulletspeed
-            local penetration = data and data.penetrationdepth
-            local ok, reason = pcall(resolverTick, origin, accel, speed, penetration)
-            if not ok then
-                Runtime.LastError = tostring(reason)
-            end
-        end))
-
-        local function update()
-            if Unloaded or not Config.Enabled then
-                return
-            end
-            if roundSystem and roundSystem.roundLock then
-                return
-            end
-            local now = os.clock()
-            if now < nextShot then
-                return
-            end
-
-            Config.WhitelistFriendlyStatus = true
-
-            local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
-            local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
-            local data = weapon and weapon._weaponData
-            local origin
-            local barrel = weapon and weapon._barrelPart
-            if barrel and barrel.Parent and isFiniteVec3(barrel.Position) then
-                origin = barrel.Position
-            end
-            origin = origin or fallbackOrigin()
-            if not (weapon and data and origin and settings and settings.bulletAcceleration) then
-                return
-            end
-            if not weapon.uniqueId or not data.bulletspeed or not data.penetrationdepth then
-                return
-            end
-            if (weapon._magCount or 0) < 1 and (weapon._spareCount or 0) < 1 then
-                return
-            end
-
-            local camPos = origin
-            pcall(function()
-                local active = cameraInterface and cameraInterface.getActiveCamera and cameraInterface.getActiveCamera()
-                if active and active.getBaseCFrame then
-                    local p = active:getBaseCFrame().Position
-                    if isFiniteVec3(p) then
-                        camPos = p
-                    end
-                end
-            end)
-
-            local accel = settings.bulletAcceleration
-            local speed = data.bulletspeed
-            local penetration = data.penetrationdepth
-            local closest = getClosestPlayers(origin)
-            local fired = false
-            frameCheckBudget = number(Config.MaxFrameChecks, 128, 1, 256)
-            frameCheckDeadline = os.clock() + number(Config.ScanBudgetMs, 5, 1, 8) / 1000
-
-            for _, entry in closest do
-                if not (entry and entry._player and entry._player.Parent) then
-                    continue
-                end
-                local aim = entryAimPos(entry)
-                if isFiniteVec3(aim) then
-                    getgenv().TapologyAimPoint = aim
-                end
-                if not isFiniteVec3(aim) or (aim - origin).Magnitude > number(Config.MaxDistance, 1500, 1, 10000) then
-                    continue
-                end
-
-                local newOrigin, newTarget, velocity, flightTime = scanPositions(origin, aim, accel, speed, penetration, entry)
-                if not (newOrigin and newTarget and velocity and velocity.Magnitude > 1e-3) then
-                    continue
-                end
-
-                if (weapon._magCount or 0) < 1 then
-                    local spare = weapon._spareCount or 0
-                    if spare < 1 then
-                        return
-                    end
-                    local magSize = math.max(1, math.floor(tonumber(data.magsize) or spare))
-                    local load = math.min(magSize, spare)
-                    weapon._magCount = load
-                    weapon._spareCount = spare - load
-                    pcall(send, network, "reload")
-                end
-                local direction = velocity
-                local bullets = {}
-                local bulletData = {
-                    camerapos = camPos,
-                    firepos = newOrigin,
-                    bullets = bullets,
-                }
-                local pelletCount = math.clamp(math.floor(tonumber(data.pelletcount) or 1), 1, 128)
-                local netTime = gameTime()
-                if type(netTime) ~= "number" or type(flightTime) ~= "number" then
-                    Runtime.LastError = "Synchronized shot time unavailable"
-                    break
-                end
-                for _ = 1, pelletCount do
-                    table.insert(bullets, { direction, nextBulletTicket(weapon) })
-                end
-
-                local sent = pcall(send, network, "newbullets", weapon.uniqueId, bulletData, netTime)
-                if not sent then
-                    break
-                end
-                fired = true
-                Runtime.Shots = Runtime.Shots + 1
-                Runtime.ClearName = entry._player.Name
-                Runtime.ClearUntil = os.clock() + 0.35
-                Runtime.ClearDist = math.floor((aim - origin).Magnitude + 0.5)
-
-                local shotPlayer, shotWeapon, shotHead = entry._player, weapon.uniqueId, characterHash(entry).Head
-                local pending
-                pending = task.delay(flightTime, function()
-                    PendingHits[pending] = nil
-                    if Unloaded or not shotPlayer.Parent then
-                        return
-                    end
-                    local hash = characterHash(entry)
-                    if not hash or hash.Head ~= shotHead or entryHealth(entry) <= 0 then
-                        return
-                    end
-                    local hitTime = gameTime() or netTime + flightTime
-                    for _, bullet in ipairs(bullets) do
-                        local reported, reason =
-                            pcall(send, network, "bullethit", shotWeapon, shotPlayer, newTarget, "Head", bullet[2], hitTime)
-                        if not reported then
-                            Runtime.LastError = tostring(reason)
-                        end
-                    end
-                end)
-                PendingHits[pending] = true
-
-                if Config.ShootEffects and weapon._barrelPart then
-                    local barrelPart = weapon._barrelPart
-                    if effects and effects.muzzleflash then
-                        pcall(effects.muzzleflash, barrelPart, data.hideflash, 0.9)
-                    end
-                    if audio and audio.playSoundId and data.firesoundid then
-                        pcall(audio.playSoundId, data.firesoundid, 2, data.firevolume, data.firepitch, barrelPart, nil, 0, 0.05)
-                    end
-                    if crosshairs and crosshairs.fireImpulse and data.crossexpansion and not weapon._aiming then
-                        pcall(crosshairs.fireImpulse, data.crossexpansion)
-                    end
-                end
-
-                nextShot = now + fireDelayForWeapon(data, weapon)
-                weapon._magCount = math.max((weapon._magCount or 1) - 1, 0)
-                if (weapon._magCount or 0) < 1 and (weapon._spareCount or 0) >= 1 then
-                    local spare = weapon._spareCount or 0
-                    local magSize = math.max(1, math.floor(tonumber(data.magsize) or spare))
-                    local load = math.min(magSize, spare)
-                    weapon._magCount = load
-                    weapon._spareCount = spare - load
-                    pcall(send, network, "reload")
-                end
-                break
-            end
-
-            if not fired then
-                Runtime.ScanMisses = Runtime.ScanMisses + 1
-                nextShot = now + number(Config.ScanMissCooldown, 0.12, 0.01, 1)
-            end
-        end
-        table.insert(Connections, RunService.Heartbeat:Connect(function()
-            local ok, reason = pcall(update)
-            if not ok then
-                Runtime.LastError = tostring(reason)
-                Runtime.Status = "Update error"
-                nextShot = os.clock() + 0.25
-            end
-        end))
-    end
-end
-
-local indicatorGui
-local indicatorRageRow
-local indicatorResolverRow
-local INDICATOR_TEXT_SIZE = 12
-
-local function accentColor()
-    local ui = env.Tapology or env.Library
-    local theme = ui and ui.Config and ui.Config.Theme
-    if theme and typeof(theme.Accent) == "Color3" then
-        return theme.Accent
-    end
-    return Color3.fromRGB(108, 147, 255)
-end
-
-local function indicatorFont()
-    local ui = env.Tapology or env.Library
-    if ui and ui.Font then
-        return ui.Font
-    end
-    local esp = env.ESP
-    if esp and esp.Font then
-        return esp.Font
-    end
-    return Font.fromEnum(Enum.Font.Code)
-end
-
-local function ensureIndicators()
-    if indicatorGui and indicatorGui.Parent then
-        return
-    end
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 2)
-    if not playerGui then
-        return
-    end
-    indicatorGui = Instance.new("ScreenGui")
-    indicatorGui.Name = "TapologyRageIndicators"
-    indicatorGui.IgnoreGuiInset = true
-    indicatorGui.ResetOnSpawn = false
-    indicatorGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    indicatorGui.Parent = playerGui
-
-    local font = indicatorFont()
-    local function makeRow(name)
-        local row = Instance.new("Frame")
-        row.Name = name
-        row.BackgroundTransparency = 1
-        row.AnchorPoint = Vector2.new(0.5, 0)
-        row.AutomaticSize = Enum.AutomaticSize.X
-        row.Size = UDim2.fromOffset(0, INDICATOR_TEXT_SIZE)
-        row.Visible = false
-        row.Parent = indicatorGui
-        local layout = Instance.new("UIListLayout")
-        layout.FillDirection = Enum.FillDirection.Horizontal
-        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-        layout.VerticalAlignment = Enum.VerticalAlignment.Center
-        layout.SortOrder = Enum.SortOrder.LayoutOrder
-        layout.Padding = UDim.new(0, 0)
-        layout.Parent = row
-        local function makeText(labelName, order)
-            local label = Instance.new("TextLabel")
-            label.Name = labelName
-            label.BackgroundTransparency = 1
-            label.AutomaticSize = Enum.AutomaticSize.X
-            label.Size = UDim2.fromOffset(0, INDICATOR_TEXT_SIZE)
-            label.FontFace = font
-            label.TextSize = INDICATOR_TEXT_SIZE
-            label.TextXAlignment = Enum.TextXAlignment.Left
-            label.TextYAlignment = Enum.TextYAlignment.Center
-            label.LayoutOrder = order
-            label.ZIndex = 5
-            label.Parent = row
-            local stroke = Instance.new("UIStroke")
-            stroke.Name = "Outline"
-            stroke.Thickness = 1
-            stroke.Color = Color3.new(0, 0, 0)
-            stroke.LineJoinMode = Enum.LineJoinMode.Miter
-            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-            stroke.Parent = label
-            return label
-        end
-        return { Row = row, Prefix = makeText("Prefix", 1), Info = makeText("Info", 2) }
-    end
-    indicatorRageRow = makeRow("Ragebot")
-    indicatorResolverRow = makeRow("Resolver")
-end
-
-local function destroyIndicators()
-    if indicatorGui then
-        pcall(function()
-            indicatorGui:Destroy()
-        end)
-    end
-    indicatorGui, indicatorRageRow, indicatorResolverRow = nil, nil, nil
-end
-
-local function paintRow(row, y, prefix, info, infoColor)
-    if not row then
-        return
-    end
-    local font = indicatorFont()
-    row.Row.Visible = true
-    row.Row.Size = UDim2.fromOffset(0, INDICATOR_TEXT_SIZE)
-    row.Row.Position = UDim2.new(0.5, 0, 0.5, y)
-    for _, label in { row.Prefix, row.Info } do
-        label.FontFace = font
-        label.TextSize = INDICATOR_TEXT_SIZE
-        label.Size = UDim2.fromOffset(0, INDICATOR_TEXT_SIZE)
-        local stroke = label:FindFirstChild("Outline")
-        if stroke and stroke:IsA("UIStroke") then
-            stroke.Thickness = 1
-            stroke.Color = Color3.new(0, 0, 0)
-            stroke.Transparency = 0
-            stroke.LineJoinMode = Enum.LineJoinMode.Miter
-        end
-    end
-    row.Prefix.Text = prefix
-    row.Prefix.TextColor3 = accentColor()
-    row.Info.Text = info
-    row.Info.TextColor3 = infoColor or Color3.new(1, 1, 1)
-end
-
-local function animatedDots()
-    local phase = math.floor(os.clock() * 3) % 4
-    if phase <= 0 then
-        return ""
-    end
-    return string.rep(".", phase)
-end
-
-local scanPart, scanAdorn
-table.insert(Connections, RunService.RenderStepped:Connect(function()
-    if Config.ShowScanRange then
-        local origin = fallbackOrigin()
-        if isFiniteVec3(origin) then
-            if not scanPart then
-                scanPart = Instance.new("Part")
-                scanPart.Name = "TapologyScan"
-                scanPart.Anchored = true
-                scanPart.CanCollide = false
-                scanPart.CanQuery = false
-                scanPart.CanTouch = false
-                scanPart.Transparency = 1
-                scanPart.Size = Vector3.new(0.2, 0.2, 0.2)
-                scanPart.Parent = workspace
-                scanAdorn = Instance.new("SphereHandleAdornment")
-                scanAdorn.Adornee = scanPart
-                scanAdorn.AlwaysOnTop = true
-                scanAdorn.ZIndex = 1
-                scanAdorn.Transparency = 0.86
-                scanAdorn.Color3 = Color3.fromRGB(108, 147, 255)
-                scanAdorn.Parent = scanPart
-            end
-            scanPart.CFrame = CFrame.new(origin)
-            scanAdorn.Radius = number(Config.ScanRangeVisual, 80, 5, 400)
-            scanAdorn.Visible = true
-        end
-    elseif scanAdorn then
-        scanAdorn.Visible = false
-    end
-    if not Config.Indicators then
-        if indicatorGui then
-            destroyIndicators()
-        end
-        return
-    end
-    ensureIndicators()
-    if not indicatorRageRow or not indicatorResolverRow then
-        return
-    end
-    local line = INDICATOR_TEXT_SIZE + 4
-    local y = 20
-    local dots = animatedDots()
-    if Config.IndicatorRagebot then
-        local info, color = " off" .. dots, Config.IndicatorRageIdle
-        if Config.Enabled then
-            local origin = fallbackOrigin()
-            local closest = isFiniteVec3(origin) and getClosestPlayers(origin) or {}
-            local entry = closest[1]
-            if entry and entry._player then
-                local dist = targetDistance(entry, origin)
-                local mode = Config.Mode == "edge" and "edge" or "default"
-                local fresh = Runtime.ClearName == entry._player.Name and os.clock() < (Runtime.ClearUntil or 0)
-                if fresh then
-                    info = string.format(" %s clear %sm%s", entry._player.Name, tostring(Runtime.ClearDist or dist or 0), dots)
-                elseif dist then
-                    info = string.format(" %s %s %sm%s", entry._player.Name, mode, tostring(dist), dots)
-                else
-                    info = string.format(" %s %s%s", entry._player.Name, mode, dots)
-                end
-                color = Config.IndicatorRageActive
-            else
-                info = " scanning" .. dots
-            end
-        end
-        paintRow(indicatorRageRow, y, "ragebot :", info, color)
-        y += line
-    else
-        indicatorRageRow.Row.Visible = false
-    end
-    if Config.IndicatorResolver then
-        local info, color
-        if not Config.Resolver then
-            info = " off"
-            color = Config.IndicatorResolverCooldown
-        elseif resolverState.phase == "resolved" then
-            info = " resolved!"
-            color = Config.IndicatorResolverReady
-        else
-            info = string.format(" %.1f", resolverCooldownLeft())
-            color = Config.IndicatorResolverCooldown
-        end
-        paintRow(indicatorResolverRow, y, "resolver :", info, color)
-    else
-        indicatorResolverRow.Row.Visible = false
-    end
-end))
-
-Controller = {
-    Config = Config,
-    Available = false,
-    Runtime = Runtime,
-    SetEnabled = function(on)
-        Config.Enabled = on and true or false
-    end,
-    GetAntiAimAngles = function(angles)
-        return applyAAAngles(angles)
-    end,
-    GetResolverState = function()
-        if not Config.Resolver then
-            return "off"
-        end
-        if resolverState.phase == "resolved" then
-            return "resolved"
-        end
-        if resolverCooldownLeft() > 0.01 then
-            return "cooldown"
-        end
-        return "ready"
-    end,
-    GetResolverCooldown = resolverCooldownLeft,
-    SetTarget = function(player, on)
-        Config.Targets[player] = on and true or nil
-    end,
-    SetFriendly = function(player, on)
-        Config.Friendlies[player] = on and true or nil
-    end,
-    Unload = function()
-        if Unloaded then
-            return
-        end
-        Unloaded = true
-        Controller.Available = false
-        Runtime.Status = "Unloaded"
-        Config.Enabled = false
-        if resolverState.entry then
-            clearRelocate(resolverState.entry)
-        end
-        for pending in pairs(PendingHits) do
-            pcall(task.cancel, pending)
-        end
-        table.clear(PendingHits)
-        for _, connection in Connections do
-            pcall(function()
-                connection:Disconnect()
-            end)
-        end
-        table.clear(Connections)
-        for _, restore in Restores do
-            pcall(restore)
-        end
-        table.clear(Restores)
-        destroyIndicators()
-        if env.Rage == Controller then
-            env.Rage = nil
-        end
-        if env.RageBot == Controller then
-            env.RageBot = nil
-        end
-    end,
-}
-
-env.RageBot, env.Rage = Controller, Controller
-
-if not PhantomForces then
-    Runtime.Status = "Unsupported place"
-    Config.Enabled = false
-else
-    task.spawn(function()
-        Runtime.Status = "Finding modules"
-        local deadline = os.clock() + number(Config.ModuleTimeout, 15, 1, 120)
-        repeat
-            if Unloaded then
-                return
-            end
-            local ok, found = pcall(findModules)
-            if ok and found then
-                Modules = found
-                env._TapologyModules = env._TapologyModules or found
-                local connectionCount, restoreCount = #Connections, #Restores
-                local started, reason = pcall(startModules)
-                if Unloaded then
-                    for index = #Connections, connectionCount + 1, -1 do
-                        pcall(function()
-                            Connections[index]:Disconnect()
-                        end)
-                        Connections[index] = nil
-                    end
-                    for index = #Restores, restoreCount + 1, -1 do
-                        pcall(Restores[index])
-                        Restores[index] = nil
-                    end
-                    return
-                end
-                if started then
-                    Controller.Available = true
-                    Runtime.Status = "Ready"
-                    Runtime.LastError = nil
-                    return
-                end
-                Runtime.LastError = tostring(reason)
-                for index = #Connections, connectionCount + 1, -1 do
-                    pcall(function()
-                        Connections[index]:Disconnect()
-                    end)
-                    Connections[index] = nil
-                end
-                for index = #Restores, restoreCount + 1, -1 do
-                    pcall(Restores[index])
-                    Restores[index] = nil
-                end
-            elseif not ok then
-                Runtime.LastError = tostring(found)
-            end
-            task.wait(1)
-        until Unloaded or os.clock() >= deadline
-        if not Unloaded then
-            Runtime.Status = "Modules unavailable"
-        end
-    end)
-end
+-- Rage is provided by modules/rage.lua (loaded later).
 end
 do
 
@@ -4525,22 +3465,20 @@ local UserInputService = cloneref(game:GetService("UserInputService"))
 local SoundService = cloneref(game:GetService("SoundService"))
 
 local Config = {
+    MovementBypass = false,
     WalkSpeed = false,
     SetSpeed = 50,
     JumpPower = false,
     HeightAddition = 10,
     NoFallDamage = false,
     BunnyHop = false,
-    OnlyWhileJumping = true,
+    OnlyWhileJumping = false,
     SlideBoost = false,
     SlideBoostSpeed = 70,
     NoStamina = false,
     NoMoveCooldown = false,
     HeightBypass = false,
     HeightBypassTime = 1.5,
-    CircleJump = false,
-    ZigzagJump = false,
-    Pathfind = false,
     MoveSmooth = 12,
     Crosshair = false,
     CrosshairMode = "onscreen",
@@ -4551,10 +3489,33 @@ local Config = {
     CrosshairBounceSpeed = 6,
     CrosshairSpin = 0,
     CrosshairSpinSpeed = 90,
+    CrosshairFadeIn = 0,
+    CrosshairFadeOut = 0,
+    CrosshairOutline = false,
+    CrosshairOutlineColor = Color3.fromRGB(0, 0, 0),
     CrosshairColor1 = Color3.fromRGB(255, 255, 255),
     CrosshairColor2 = Color3.fromRGB(255, 255, 255),
     CrosshairColor3 = Color3.fromRGB(255, 255, 255),
     CrosshairColor4 = Color3.fromRGB(255, 255, 255),
+
+    HitMarkers = false,
+    HitMarkerModes = { ["2d"] = true, ["3d"] = false },
+    HitMarkerGap = 4,
+    HitMarkerThickness = 2,
+    HitMarkerLength = 10,
+    HitMarkerDuration = 0.35,
+    HitMarkerFadeIn = 0,
+    HitMarkerFadeOut = 0,
+    HitMarkerOutline = false,
+    HitMarkerOutlineColor = Color3.fromRGB(0, 0, 0),
+    HitMarkerColor1 = Color3.fromRGB(255, 255, 255),
+    HitMarkerColor2 = Color3.fromRGB(255, 255, 255),
+    HitMarkerColor3 = Color3.fromRGB(255, 255, 255),
+    HitMarkerColor4 = Color3.fromRGB(255, 255, 255),
+    HitMarkerAlpha1 = 1,
+    HitMarkerAlpha2 = 1,
+    HitMarkerAlpha3 = 1,
+    HitMarkerAlpha4 = 1,
     RecoilControl = false,
     RecoilScale = 0.55,
     Removals = false,
@@ -4570,16 +3531,20 @@ local Config = {
     CustomSound = "",
 
     ThirdPerson = false,
-    ShowCharacter = false,
+    ShowCharacter = true,
     ShowCharacterWhileAiming = false,
-    HideViewmodel = true,
-    ApplyAntiAimToCharacter = true,
+    HideViewmodel = false,
+    ApplyAntiAimToCharacter = false,
+    ThirdPersonWeapon = true,
+    ThirdPersonClip = true,
+    ThirdPersonMinimum = 3,
+    ThirdPersonMaximum = 8,
     CameraOffsetX = 0,
-    CameraOffsetY = 1.5,
+    CameraOffsetY = 0,
     CameraOffsetZ = 8,
     CameraOffsetAlwaysVisible = true,
-    CameraSmooth = true,
-    CameraSmoothness = 14,
+    CameraSmooth = false,
+    CameraSmoothness = 20,
 
     FOV = false,
     FOVAmount = 90,
@@ -4616,6 +3581,7 @@ local Config = {
     },
 
     ShootSounds = false,
+    MuteGameShootSounds = true,
     ShootSound = "Impact",
     ShootSoundVolume = 1.5,
     ShootSoundPitch = 1,
@@ -4655,7 +3621,7 @@ do
         Config.RemoveItems = {}
     end
     if not next(Config.RemoveItems) then
-        if Config.RemoveDecals then Config.RemoveItems.decals = true end
+        Config.RemoveItems.decals = nil
         if Config.RemoveArms then Config.RemoveItems.arms = true end
         if Config.RemoveAnimations then Config.RemoveItems.animations = true end
         if Config.RemoveTeam then Config.RemoveItems.team = true end
@@ -4674,7 +3640,7 @@ local function hudOn(name)
 end
 
 local function syncRemovalFlags()
-    Config.RemoveDecals = removalOn("decals")
+    Config.RemoveDecals = false
     Config.RemoveArms = removalOn("arms")
     Config.RemoveAnimations = removalOn("animations")
     Config.RemoveTeam = removalOn("team")
@@ -4718,24 +3684,43 @@ local function bindStep(name, priority, fn)
     table.insert(BoundSteps, name)
 end
 
-local function raycastCamera(origin, direction)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local ignore = { workspace.CurrentCamera }
-    if LocalPlayer.Character then
-        table.insert(ignore, LocalPlayer.Character)
+local camRayParams = RaycastParams.new()
+camRayParams.FilterType = Enum.RaycastFilterType.Exclude
+camRayParams.IgnoreWater = true
+local camRayIgnore = table.create(4)
+local camRayIgnoreAt = 0
+local function refreshCamRayIgnore(force, extra)
+    local now = os.clock()
+    if not force and now - camRayIgnoreAt < 0.75 and extra == nil then
+        return
+    end
+    camRayIgnoreAt = now
+    table.clear(camRayIgnore)
+    local camInst = workspace.CurrentCamera
+    if camInst then
+        camRayIgnore[#camRayIgnore + 1] = camInst
+    end
+    local character = LocalPlayer.Character
+    if character then
+        camRayIgnore[#camRayIgnore + 1] = character
     end
     local playersFolder = workspace:FindFirstChild("Players")
-    local ignoreFolder = workspace:FindFirstChild("Ignore")
     if playersFolder then
-        table.insert(ignore, playersFolder)
+        camRayIgnore[#camRayIgnore + 1] = playersFolder
     end
+    local ignoreFolder = workspace:FindFirstChild("Ignore")
     if ignoreFolder then
-        table.insert(ignore, ignoreFolder)
+        camRayIgnore[#camRayIgnore + 1] = ignoreFolder
     end
-    params.FilterDescendantsInstances = ignore
-    params.IgnoreWater = true
-    return workspace:Raycast(origin, direction, params)
+    if typeof(extra) == "Instance" then
+        camRayIgnore[#camRayIgnore + 1] = extra
+    end
+    camRayParams.FilterDescendantsInstances = camRayIgnore
+end
+refreshCamRayIgnore(true)
+local function raycastCamera(origin, direction, extra)
+    refreshCamRayIgnore(true, extra)
+    return workspace:Raycast(origin, direction, camRayParams)
 end
 
 if Modules then
@@ -4745,13 +3730,18 @@ if Modules then
     local weapons = Modules.WeaponControllerInterface
     local cameraObject = Modules.MainCameraObject
     local cameraInterface = Modules.CameraInterface
-    local screenCull = Modules.ScreenCull
     local thirdPersonObject = Modules.ThirdPersonObject
     local replicationObject = Modules.ReplicationObject
     local playerDataIface = Modules.PlayerDataClientInterface
 
     local smoothOffset = Vector3.new(Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ)
+    local smoothCamPos = nil
     local lastCamClock = os.clock()
+    local lastOffsetX, lastOffsetY, lastOffsetZ = Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ
+    local targetOffset = smoothOffset
+    local lastRayDesired = nil
+    local lastRayClock = 0
+    local RAY_HZ = 1 / 36
 
     local fakeRepObject
     local currentObj
@@ -4759,6 +3749,67 @@ if Modules then
     local lastShowPos
     local showDelta = 0
     local setCharacterRender
+
+    local characterConfig
+    local savedMoveCooldowns = {}
+    local moveCooldownPatched = false
+    local function findCharacterConfig()
+        if characterConfig then
+            return characterConfig
+        end
+        if not getgc then
+            return nil
+        end
+        for _, value in getgc(true) do
+            if type(value) == "table" and type(rawget(value, "casualMovementConfig")) == "table" then
+                local normal = value.casualMovementConfig.normal
+                if type(normal) == "table" and normal.slideCooldown ~= nil then
+                    characterConfig = value
+                    return characterConfig
+                end
+            end
+        end
+        return nil
+    end
+    local cooldownKeys = { "jumpCooldown", "maxJumpCooldown", "slideCooldown", "slidePreCooldown" }
+    local function setMoveCooldowns(on)
+        local cfg = findCharacterConfig()
+        if not cfg then
+            return
+        end
+        for _, bucketName in { "casualMovementConfig", "adrenalineMovementConfig" } do
+            local bucket = cfg[bucketName]
+            if type(bucket) == "table" then
+                for _, stanceName in { "normal", "stamina" } do
+                    local stance = bucket[stanceName]
+                    if type(stance) == "table" then
+                        local id = bucketName .. "/" .. stanceName
+                        local saved = savedMoveCooldowns[id]
+                        if not saved then
+                            saved = {}
+                            savedMoveCooldowns[id] = saved
+                            for _, key in cooldownKeys do
+                                if stance[key] ~= nil then
+                                    saved[key] = stance[key]
+                                end
+                            end
+                        end
+                        for _, key in cooldownKeys do
+                            if saved[key] ~= nil then
+                                stance[key] = on and 0 or saved[key]
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        moveCooldownPatched = on and true or false
+    end
+    table.insert(Restores, function()
+        if moveCooldownPatched then
+            setMoveCooldowns(false)
+        end
+    end)
 
     if network and type(network.send) == "function" then
         local send = network.send
@@ -4800,18 +3851,85 @@ if Modules then
     if charObject and type(charObject.setBaseWalkSpeed) == "function" then
         local setBaseWalkSpeed = charObject.setBaseWalkSpeed
         charObject.setBaseWalkSpeed = function(self, speed)
-            return setBaseWalkSpeed(self, Config.WalkSpeed and Config.SetSpeed or speed)
+            if Config.WalkSpeed then
+                local wanted = math.clamp(tonumber(Config.SetSpeed) or 50, 1, 200)
+                if Config.SlideBoost and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+                    wanted = math.clamp(wanted + (tonumber(Config.SlideBoostSpeed) or 70), 1, 200)
+                end
+                return setBaseWalkSpeed(self, wanted)
+            end
+            return setBaseWalkSpeed(self, speed)
         end
         table.insert(Restores, function()
             charObject.setBaseWalkSpeed = setBaseWalkSpeed
+        end)
+    end
+    if charObject and type(charObject.updateWalkSpeed) == "function" then
+        local updateWalkSpeed = charObject.updateWalkSpeed
+        charObject.updateWalkSpeed = function(self, ...)
+            local result = updateWalkSpeed(self, ...)
+            if Config.WalkSpeed then
+                local speed = math.clamp(tonumber(Config.SetSpeed) or 50, 1, 200)
+                if Config.SlideBoost and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+                    speed = math.clamp(speed + (tonumber(Config.SlideBoostSpeed) or 70), 1, 200)
+                end
+                if self._baseWalkSpeed ~= speed then
+                    pcall(function()
+                        self._baseWalkSpeed = speed
+                        if type(self.setBaseWalkSpeed) == "function" then
+                            self:setBaseWalkSpeed(speed)
+                        end
+                    end)
+                end
+            end
+            return result
+        end
+        table.insert(Restores, function()
+            charObject.updateWalkSpeed = updateWalkSpeed
+        end)
+    end
+
+    if charObject and type(charObject.canJump) == "function" then
+        local canJump = charObject.canJump
+        charObject.canJump = function(self, ...)
+            if Config.NoMoveCooldown then
+                return true
+            end
+            return canJump(self, ...)
+        end
+        table.insert(Restores, function()
+            charObject.canJump = canJump
         end)
     end
 
     if charObject and type(charObject.jump) == "function" then
         local jump = charObject.jump
         charObject.jump = function(self, height, vaulting)
-            local add = Config.JumpPower and Config.HeightAddition or 0
-            return jump(self, (height or 4) + add, vaulting)
+            if not Config.JumpPower then
+                return jump(self, height, vaulting)
+            end
+            local add = math.clamp(tonumber(Config.HeightAddition) or 0, 0, 30)
+            local result = jump(self, (height or 4) + add, vaulting)
+            if add > 0 then
+                pcall(function()
+                    local root = self.getRealRootPart and self:getRealRootPart() or self.getRootPart and self:getRootPart() or self._rootPart
+                    if typeof(root) == "Instance" and root:IsA("BasePart") then
+                        local vel = root.AssemblyLinearVelocity
+                        local boost = 12 + add * 2.2
+                        if vel.Y < boost then
+                            root.AssemblyLinearVelocity = Vector3.new(vel.X, boost, vel.Z)
+                        end
+                    end
+                    if self._velocity and typeof(self._velocity) == "Vector3" then
+                        local vel = self._velocity
+                        local boost = 12 + add * 2.2
+                        if vel.Y < boost then
+                            self._velocity = Vector3.new(vel.X, boost, vel.Z)
+                        end
+                    end
+                end)
+            end
+            return result
         end
         table.insert(Restores, function()
             charObject.jump = jump
@@ -4830,6 +3948,90 @@ if Modules then
         table.insert(Restores, function()
             cameraObject.getBaseFov = getBaseFov
         end)
+    end
+
+    -- Constant-exact third person: offset CurrentCamera.CFrame on __newindex only.
+    -- Clip raycasts are throttled (~20Hz) so camera writes don't tank FPS.
+    do
+        local tpParam = RaycastParams.new()
+        tpParam.FilterType = Enum.RaycastFilterType.Include
+        tpParam.IgnoreWater = true
+        local map = workspace:FindFirstChild("Map")
+        if map then
+            tpParam.FilterDescendantsInstances = { map }
+        end
+        local cachedDist = math.clamp(tonumber(Config.ThirdPersonMaximum) or 8, 1, 20)
+        local cachedCan = false
+        local lastRayAt = 0
+        local lastAliveAt = 0
+        local cachedAlive = false
+        local hookMeta = hookmetamethod or hook_metamethod
+        local checkCaller = checkcaller or function()
+            return false
+        end
+        if type(hookMeta) == "function" then
+            local currentCamera = workspace.CurrentCamera
+            local newIndex
+            newIndex = hookMeta(currentCamera, "__newindex", function(self, property, value)
+                if not checkCaller() and self == workspace.CurrentCamera and property == "CFrame" and typeof(value) == "CFrame" then
+                    if not Config.ThirdPerson then
+                        Config._InThirdPerson = false
+                        return newIndex(self, property, value)
+                    end
+                    local now = os.clock()
+                    if now - lastAliveAt > 0.1 then
+                        lastAliveAt = now
+                        cachedAlive = false
+                        pcall(function()
+                            cachedAlive = charInterface and charInterface.isAlive and charInterface.isAlive()
+                        end)
+                        if not cachedAlive then
+                            local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                            cachedAlive = hum and hum.Health > 0
+                        end
+                    end
+                    local canThirdPerson = false
+                    if cachedAlive then
+                        local maxDist = math.clamp(tonumber(Config.ThirdPersonMaximum) or 8, 1, 20)
+                        local minDist = math.clamp(tonumber(Config.ThirdPersonMinimum) or 3, 1, 10)
+                        if Config.ThirdPersonClip then
+                            if now - lastRayAt >= 0.05 then
+                                lastRayAt = now
+                                if not tpParam.FilterDescendantsInstances or #tpParam.FilterDescendantsInstances == 0 then
+                                    local mapFolder = workspace:FindFirstChild("Map")
+                                    if mapFolder then
+                                        tpParam.FilterDescendantsInstances = { mapFolder }
+                                    end
+                                end
+                                local result = workspace:Raycast(value.Position, -value.LookVector * maxDist, tpParam)
+                                if not result or not result.Instance.CanCollide or result.Instance.Transparency == 1 then
+                                    cachedDist = maxDist
+                                    cachedCan = true
+                                else
+                                    local magnitude = (result.Position - value.Position).Magnitude
+                                    cachedCan = magnitude >= minDist
+                                    cachedDist = cachedCan and magnitude or 0
+                                end
+                            end
+                            canThirdPerson = cachedCan
+                            if canThirdPerson and cachedDist > 0 then
+                                value = value * CFrame.new(0, 0, cachedDist)
+                            end
+                        else
+                            value = value * CFrame.new(0, 0, maxDist)
+                            canThirdPerson = true
+                        end
+                    end
+                    Config._InThirdPerson = canThirdPerson
+                end
+                return newIndex(self, property, value)
+            end)
+            table.insert(Restores, function()
+                pcall(function()
+                    hookMeta(workspace.CurrentCamera, "__newindex", newIndex)
+                end)
+            end)
+        end
     end
 
     if thirdPersonObject and type(thirdPersonObject.setCharacterRender) == "function" then
@@ -4920,63 +4122,6 @@ if Modules then
         end)
     end
 
-    if screenCull and type(screenCull.step) == "function" then
-        local step = screenCull.step
-        screenCull.step = function(...)
-            step(...)
-            if not Config.ThirdPerson then
-                smoothOffset = Vector3.new(Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ)
-                lastCamClock = os.clock()
-                return
-            end
-            local cam = camera()
-            if not cam then
-                return
-            end
-            local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
-            local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
-            local aiming = weapon and weapon._aiming
-            if aiming and not Config.ShowCharacterWhileAiming and not Config.CameraOffsetAlwaysVisible then
-                return
-            end
-
-            local target = Vector3.new(Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ)
-            local now = os.clock()
-            local dt = math.clamp(now - lastCamClock, 0, 0.1)
-            lastCamClock = now
-            if Config.CameraSmooth then
-                local smooth = math.clamp(tonumber(Config.CameraSmoothness) or 14, 1, 40)
-                local rate = (42 - smooth) * 0.45
-                local alpha = 1 - math.exp(-rate * dt)
-                smoothOffset = smoothOffset:Lerp(target, alpha)
-            else
-                smoothOffset = target
-            end
-            if smoothOffset.Magnitude < 1e-4 then
-                return
-            end
-
-            local didHit = false
-            if Config.CameraOffsetAlwaysVisible then
-                local oldPosition = cam.CFrame.Position
-                local newPosition = cam.CFrame * smoothOffset
-                local dir = newPosition - oldPosition
-                local hit = raycastCamera(oldPosition, dir)
-                if hit then
-                    local frac = (hit.Position - oldPosition).Magnitude / math.max(smoothOffset.Magnitude, 1e-4)
-                    cam.CFrame *= CFrame.new(smoothOffset * math.clamp(frac, 0, 1) * 0.99)
-                    didHit = true
-                end
-            end
-            if not didHit then
-                cam.CFrame *= CFrame.new(smoothOffset)
-            end
-        end
-        table.insert(Restores, function()
-            screenCull.step = step
-        end)
-    end
-
     local lastBhopJump = 0
     table.insert(Connections, RunService.Heartbeat:Connect(function()
         if not Config.BunnyHop then
@@ -5028,6 +4173,315 @@ if Modules then
             end
         end
     end))
+
+    local lastGroundSnap = 0
+    local function rootPartOf(object)
+        if not object then
+            return nil
+        end
+        local ok, part = pcall(function()
+            if object.getRealRootPart then
+                return object:getRealRootPart()
+            end
+            if object.getRootPart then
+                return object:getRootPart()
+            end
+            return object._rootPart
+        end)
+        if ok and typeof(part) == "Instance" and part:IsA("BasePart") then
+            return part
+        end
+        return nil
+    end
+    local function targetMoveSpeed()
+        local speed = math.clamp(tonumber(Config.SetSpeed) or 50, 1, 200)
+        if Config.SlideBoost and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+            speed = math.clamp(speed + (tonumber(Config.SlideBoostSpeed) or 70), 1, 200)
+        end
+        return speed
+    end
+    local lastWalkSpeedApplied = nil
+    local function applyPfWalkSpeed(object)
+        if not object then
+            return
+        end
+        local speed = targetMoveSpeed()
+        if lastWalkSpeedApplied == speed and tonumber(object._baseWalkSpeed) == speed then
+            return
+        end
+        lastWalkSpeedApplied = speed
+        pcall(function()
+            object._baseWalkSpeed = speed
+            object._walkSpeedMult = 1
+            if type(object.setBaseWalkSpeed) == "function" then
+                object:setBaseWalkSpeed(speed)
+            end
+        end)
+    end
+    local hiddenHud = {}
+    local hiddenHudNodes = {}
+    local hiddenDecals = {}
+    local decalQueue = {}
+    local decalIndex = 1
+    local decalListedAt = 0
+    local hiddenEnemies = {}
+    local removalTick = 0
+    local function hideModelVisuals(model)
+        if typeof(model) ~= "Instance" then
+            return
+        end
+        for _, desc in model:GetDescendants() do
+            if desc:IsA("BasePart") or desc:IsA("Decal") or desc:IsA("Texture") then
+                desc.LocalTransparencyModifier = 1
+            end
+        end
+    end
+    local function applyHudRemovals()
+        local hideChat = hudOn("chat")
+        local hideKillfeed = hudOn("killfeed")
+        local playerGui = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not playerGui then
+            return
+        end
+        if hideChat or hideKillfeed then
+            local chatGui = playerGui:FindFirstChild("ChatScreenGui")
+            if hideChat and chatGui and chatGui:IsA("ScreenGui") then
+                if hiddenHud[chatGui] == nil then
+                    hiddenHud[chatGui] = chatGui.Enabled
+                end
+                chatGui.Enabled = false
+            end
+            local hudGui = playerGui:FindFirstChild("HudScreenGui")
+            if hideKillfeed and hudGui then
+                local main = hudGui:FindFirstChild("Main") or hudGui:FindFirstChild("Main", true)
+                local killfeed = main and (main:FindFirstChild("DisplayKillfeed") or main:FindFirstChild("DisplayKillfeed", true))
+                if killfeed and killfeed:IsA("GuiObject") then
+                    if hiddenHudNodes[killfeed] == nil then
+                        hiddenHudNodes[killfeed] = killfeed.Visible
+                    end
+                    killfeed.Visible = false
+                end
+            end
+            for _, child in playerGui:GetChildren() do
+                if child:IsA("ScreenGui") then
+                    local lower = string.lower(child.Name)
+                    local match = (hideChat and string.find(lower, "chat", 1, true) and child.Name ~= "ChatScreenGui")
+                        or (hideKillfeed and (string.find(lower, "kill", 1, true) or string.find(lower, "feed", 1, true)))
+                    if match then
+                        if hiddenHud[child] == nil then
+                            hiddenHud[child] = child.Enabled
+                        end
+                        child.Enabled = false
+                    end
+                end
+            end
+            pcall(function()
+                local core = game:GetService("CoreGui")
+                local exp = core:FindFirstChild("ExperienceChat")
+                if hideChat and exp and exp:IsA("ScreenGui") then
+                    if hiddenHud[exp] == nil then
+                        hiddenHud[exp] = exp.Enabled
+                    end
+                    exp.Enabled = false
+                end
+            end)
+        else
+            if next(hiddenHud) then
+                for gui, enabled in hiddenHud do
+                    hiddenHud[gui] = nil
+                    if typeof(gui) == "Instance" and gui.Parent then
+                        gui.Enabled = enabled
+                    end
+                end
+            end
+            if next(hiddenHudNodes) then
+                for node, visible in hiddenHudNodes do
+                    hiddenHudNodes[node] = nil
+                    if typeof(node) == "Instance" and node.Parent then
+                        node.Visible = visible
+                    end
+                end
+            end
+        end
+    end
+    local function applyWorldRemovals(object)
+        if next(hiddenDecals) then
+            local restored = 0
+            for inst, transparency in hiddenDecals do
+                hiddenDecals[inst] = nil
+                if typeof(inst) == "Instance" and inst.Parent then
+                    inst.Transparency = transparency
+                end
+                restored += 1
+                if restored >= 40 then
+                    break
+                end
+            end
+        end
+        local nowTick = os.clock()
+        if Config.RemoveAnimations and object and object._humanoid and nowTick - (rawget(object, "_tapologyAnimAt") or 0) >= 0.25 then
+            rawset(object, "_tapologyAnimAt", nowTick)
+            pcall(function()
+                for _, track in object._humanoid:GetPlayingAnimationTracks() do
+                    local name = string.lower(track.Name)
+                    if string.find(name, "reload", 1, true) or string.find(name, "equip", 1, true) or string.find(name, "inspect", 1, true) or string.find(name, "sprint", 1, true) then
+                        track:Stop(0)
+                    end
+                end
+            end)
+        end
+        if nowTick - removalTick > 0.35 and (Config.RemoveEnemy or Config.RemoveTeam or Config.RemoveExplosions or Config.RemoveDroppedGuns) then
+            removalTick = nowTick
+            local folder = workspace:FindFirstChild("Players")
+            if folder and (Config.RemoveEnemy or Config.RemoveTeam) then
+                for _, player in Players:GetPlayers() do
+                    if player ~= LocalPlayer then
+                        local same = LocalPlayer.TeamColor and player.TeamColor == LocalPlayer.TeamColor
+                        local hide = (Config.RemoveEnemy and not same) or (Config.RemoveTeam and same)
+                        local model = folder:FindFirstChild(player.Name)
+                        if hide and model then
+                            for _, desc in model:GetDescendants() do
+                                if desc:IsA("BasePart") and hiddenEnemies[desc] == nil then
+                                    hiddenEnemies[desc] = desc.LocalTransparencyModifier
+                                    desc.LocalTransparencyModifier = 1
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if Config.RemoveExplosions then
+                local ignoreFolder = workspace:FindFirstChild("Ignore")
+                if ignoreFolder then
+                    for _, desc in ignoreFolder:GetChildren() do
+                        local lower = string.lower(desc.Name)
+                        if string.find(lower, "explosion", 1, true) or string.find(lower, "blast", 1, true) then
+                            for _, effect in desc:GetDescendants() do
+                                if effect:IsA("ParticleEmitter") or effect:IsA("Fire") or effect:IsA("Smoke") then
+                                    effect.Enabled = false
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if Config.RemoveDroppedGuns then
+                local ignoreFolder = workspace:FindFirstChild("Ignore")
+                local dropped = ignoreFolder and ignoreFolder:FindFirstChild("Dropped")
+                if dropped then
+                    for _, desc in dropped:GetDescendants() do
+                        if desc:IsA("BasePart") then
+                            desc.LocalTransparencyModifier = 1
+                        end
+                    end
+                end
+            end
+        elseif not Config.RemoveEnemy and not Config.RemoveTeam and next(hiddenEnemies) then
+            for inst, modifier in hiddenEnemies do
+                hiddenEnemies[inst] = nil
+                if typeof(inst) == "Instance" and inst.Parent then
+                    inst.LocalTransparencyModifier = modifier
+                end
+            end
+        end
+    end
+    table.insert(Connections, RunService.Heartbeat:Connect(function()
+        local object = charInterface and charInterface.getCharacterObject and charInterface.getCharacterObject()
+        do
+            local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
+            local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
+            local classify = env.Aim and env.Aim.Classify
+            local className = type(classify) == "function" and classify(weapon) or nil
+            if className then
+                getgenv().TapologyWeaponClass = className
+            end
+        end
+        if Config.NoStamina and object then
+            pcall(function()
+                if object._maxStamina ~= nil and object._stamina ~= nil then
+                    object._stamina = object._maxStamina
+                elseif object._stamina ~= nil then
+                    object._stamina = 1
+                end
+                if object._sprintCooldown ~= nil then
+                    object._sprintCooldown = 0
+                end
+            end)
+        end
+        if Config.NoMoveCooldown then
+            if not moveCooldownPatched then
+                setMoveCooldowns(true)
+            end
+            if object then
+                pcall(function()
+                    object._moveCooldown = 0
+                    object._jumpCooldown = 0
+                    object._nextJump = 0
+                    object._lastJumpTime = 0
+                    object._lastLandTime = 0
+                    object.dived = false
+                    object.sprintDisabled = false
+                end)
+            end
+        elseif moveCooldownPatched then
+            setMoveCooldowns(false)
+        end
+        if Config.WalkSpeed then
+            applyPfWalkSpeed(object)
+        else
+            lastWalkSpeedApplied = nil
+        end
+        local root = rootPartOf(object)
+        if Config.HeightBypass and root then
+            local now = os.clock()
+            local waitFor = math.clamp(tonumber(Config.HeightBypassTime) or 1.5, 0.2, 8)
+            if now - lastGroundSnap >= waitFor then
+                lastGroundSnap = now
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.FilterDescendantsInstances = { root, workspace.CurrentCamera }
+                local hit = workspace:Raycast(root.Position, Vector3.new(0, -500, 0), params)
+                if hit and (root.Position.Y - hit.Position.Y) > 18 then
+                    local vel = root.AssemblyLinearVelocity
+                    root.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3.5, 0)) * (root.CFrame - root.CFrame.Position)
+                    root.AssemblyLinearVelocity = Vector3.new(vel.X, math.min(vel.Y, 0), vel.Z)
+                end
+            end
+        end
+        applyHudRemovals()
+        applyWorldRemovals(object)
+    end))
+    bindStep("TapologyRemoveArms", Enum.RenderPriority.Camera.Value + 75, function()
+        if not Config.RemoveArms then
+            return
+        end
+        local object = charInterface and charInterface.getCharacterObject and charInterface.getCharacterObject()
+        if not object then
+            return
+        end
+        local function hideArmModel(model)
+            if typeof(model) ~= "Instance" then
+                return
+            end
+            for _, desc in model:GetDescendants() do
+                if desc:IsA("BasePart") or desc:IsA("Decal") or desc:IsA("Texture") then
+                    local lower = string.lower(desc.Name)
+                    if string.find(lower, "weapon", 1, true)
+                        or string.find(lower, "gun", 1, true)
+                        or string.find(lower, "barrel", 1, true)
+                        or string.find(lower, "sight", 1, true)
+                        or string.find(lower, "mag", 1, true)
+                        or string.find(lower, "stock", 1, true)
+                    then
+                        continue
+                    end
+                    desc.LocalTransparencyModifier = 1
+                end
+            end
+        end
+        hideArmModel(object._leftArmModel)
+        hideArmModel(object._rightArmModel)
+    end)
 
     local smoothShowVel = Vector3.zero
     local wasHidingViewmodel = false
@@ -5093,24 +4547,35 @@ if Modules then
     end
 
     bindStep("TapologyMiscHideVM", Enum.RenderPriority.Camera.Value + 50, function()
-        local alive = charInterface and charInterface.isAlive and charInterface.isAlive()
-        local hideView = Config.ThirdPerson and alive and Config.HideViewmodel ~= false
-        if hideView then
-            setFirstPersonHidden(true)
-        else
+        if not Config.ThirdPerson or Config.HideViewmodel ~= true then
             setFirstPersonHidden(false)
+            return
         end
+        local alive = charInterface and charInterface.isAlive and charInterface.isAlive()
+        setFirstPersonHidden(alive == true)
     end)
 
     table.insert(Connections, RunService.Stepped:Connect(function(_, ndt)
+        if not Config.ThirdPerson then
+            if currentObj or startedShow or wasHidingViewmodel then
+                setFirstPersonHidden(false)
+                if currentObj or startedShow then
+                    destroyShowCharacter()
+                end
+                smoothShowVel = Vector3.zero
+            end
+            return
+        end
         local alive = charInterface and charInterface.isAlive and charInterface.isAlive()
-        local wantShow = Config.ThirdPerson and Config.ShowCharacter and alive
+        local wantShow = Config.ShowCharacter and alive
         local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
         local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
         local aiming = weapon and weapon._aiming
 
-        if Config.ThirdPerson and alive and Config.HideViewmodel ~= false then
+        if alive and Config.HideViewmodel == true then
             setFirstPersonHidden(true)
+        elseif Config.HideViewmodel ~= true then
+            setFirstPersonHidden(false)
         end
 
         if not wantShow then
@@ -5163,27 +4628,6 @@ if Modules then
                 angles = active:getAngles()
             end
         end)
-        Config.ApplyAntiAimToCharacter = true
-        do
-            local rage = env.Rage
-            if rage and rage.GetAntiAimAngles then
-                local ok, aa = pcall(rage.GetAntiAimAngles, angles)
-                if ok and typeof(aa) == "Vector3" then
-                    angles = aa
-                end
-            end
-            local rc = rage and rage.Config
-            local aimPoint = getgenv().TapologyAimPoint
-            if rc and rc.RageVisual and typeof(aimPoint) == "Vector3" then
-                local flat = aimPoint - position
-                if Vector3.new(flat.X, 0, flat.Z).Magnitude > 1 then
-                    local yaw = math.atan2(-flat.X, -flat.Z)
-                    local pitch = math.asin(math.clamp(flat.Unit.Y, -1, 1))
-                    angles = Vector3.new(pitch, yaw, 0)
-                end
-            end
-        end
-
         local tickTime = tick()
         local clockTime = os.clock()
         pcall(function()
@@ -5210,15 +4654,7 @@ if Modules then
             fakeRepObject._lastBarrelAngles = Vector3.zero
             fakeRepObject:step(3, true)
             if currentObj then
-                currentObj.canRenderWeapon = true
-                do
-                    local rage = env.Rage
-                    local rc = rage and rage.Config
-                    if rc and rc.AntiAim and rc.ForceStance and currentObj.setStance then
-                        local stance = rc.Stance == "Stand" and "Stand" or rc.Stance == "Crouch" and "Crouch" or "Prone"
-                        pcall(currentObj.setStance, currentObj, stance)
-                    end
-                end
+                currentObj.canRenderWeapon = Config.ThirdPersonWeapon ~= false
                 if not Config.ShowCharacterWhileAiming and aiming and setCharacterRender then
                     setCharacterRender(currentObj, false)
                 elseif setCharacterRender then
@@ -5272,6 +4708,15 @@ if Modules then
         end
 
         local activeCam = cameraInterface and cameraInterface.getActiveCamera and cameraInterface.getActiveCamera()
+        if not Config.ThirdPerson and smoothCamPos then
+            smoothOffset = Vector3.new(Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ)
+            targetOffset = smoothOffset
+            lastOffsetX, lastOffsetY, lastOffsetZ = Config.CameraOffsetX, Config.CameraOffsetY, Config.CameraOffsetZ
+            smoothCamPos = nil
+            lastRayDesired = nil
+            lastCamClock = os.clock()
+        end
+
         if Config.FOV then
             local amount = math.clamp(tonumber(Config.FOVAmount) or 90, 40, 135)
             cam.FieldOfView = amount
@@ -5875,7 +5320,8 @@ if Modules then
         local leftArm = object and object._leftArmModel
         local rightArm = object and object._rightArmModel
 
-        if bodyOn then
+        local bodyThirdPerson = Config.ThirdPerson and Config.ShowCharacter
+        if bodyOn and bodyThirdPerson then
             local bodies = collectBodyModels(object)
             local active = {}
             for _, model in bodies do
@@ -5890,11 +5336,7 @@ if Modules then
                 end
             end
 
-            if Config.ShowCharacter and Config.ThirdPerson then
-                hideProxyBody(object)
-            elseif #bodies > 0 then
-                hideProxyBody(object)
-            end
+            hideProxyBody(object)
             local tpo = currentObj or (fakeRepObject and fakeRepObject._thirdPersonObject)
             if tpo then
                 restoreBodyPartSizes(tpo)
@@ -6006,13 +5448,36 @@ if Modules then
                     end
                 end
             end
-        elseif next(lastBodyModels) then
-            for model in pairs(lastBodyModels) do
-                restoreCachedParts(function(part)
-                    return modelContains(model, part)
-                end)
+        else
+            if next(lastBodyModels) then
+                for model in pairs(lastBodyModels) do
+                    restoreCachedParts(function(part)
+                        return modelContains(model, part)
+                    end)
+                end
+                table.clear(lastBodyModels)
             end
-            table.clear(lastBodyModels)
+            if object then
+                hideProxyBody(object)
+            end
+            local fpBody = object and object._characterModel
+            if typeof(fpBody) == "Instance" then
+                for _, desc in fpBody:GetDescendants() do
+                    if desc:IsA("BasePart") then
+                        local folder = desc:FindFirstChild("TapologyField")
+                        if folder then
+                            folder:Destroy()
+                        end
+                        if desc.Material == Enum.Material.ForceField then
+                            desc.Material = Enum.Material.SmoothPlastic
+                            desc.Reflectance = 0
+                            desc.LocalTransparencyModifier = 1
+                        end
+                    elseif desc:IsA("Texture") and desc:FindFirstAncestor("TapologyField") then
+                        desc:Destroy()
+                    end
+                end
+            end
         end
 
         if weaponOn then
@@ -6176,7 +5641,90 @@ if Modules then
     end
     env._TapologyPlayShootSound = playShootSound
 
-    local lastFireCount, lastFireWeapon = nil, nil
+    local function soundToken(value)
+        return string.lower(tostring(value or ""))
+    end
+    local function isGameShootSound(id, name)
+        local token = soundToken(id) .. " " .. soundToken(name)
+        for _, key in {
+            "fire", "shoot", "shot", "gun", "rifle", "pistol", "shotgun", "sniper", "suppress", "muzzle",
+            "blast", "bolt", "pump", "cycle", "shell", "carbine", "pdw", "lmg", "dmr",
+        } do
+            if string.find(token, key, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+    local function isGameHitSound(id, name)
+        local token = soundToken(id) .. " " .. soundToken(name)
+        for _, key in {
+            "hit", "impact", "flesh", "body", "head", "blood", "ricochet", "whiz", "crack", "material",
+        } do
+            if string.find(token, key, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local audio = Modules and Modules.AudioSystem
+    if audio then
+        local function wrapAudio(fnName)
+            local nextFn = audio[fnName]
+            if type(nextFn) ~= "function" then
+                return
+            end
+            audio[fnName] = function(...)
+                local args = table.pack(...)
+                local id, name
+                for i = 1, args.n do
+                    local value = args[i]
+                    if type(value) == "string" then
+                        if not id and (string.find(value, "rbxasset", 1, true) or string.find(value, "http", 1, true)) then
+                            id = value
+                        elseif not name then
+                            name = value
+                        end
+                    elseif typeof(value) == "Instance" and value:IsA("Sound") then
+                        id = id or value.SoundId
+                        name = name or value.Name
+                    end
+                end
+                local tracers = env.Tracers
+                if Config.ShootSounds and Config.MuteGameShootSounds and isGameShootSound(id, name) then
+                    playShootSound(false, true)
+                    return
+                end
+                if tracers and tracers.Config and tracers.Config.HitSounds and tracers.Config.MuteGameHitSounds and isGameHitSound(id, name) then
+                    if tracers.PlayHitSound then
+                        tracers.PlayHitSound(true)
+                    end
+                    return
+                end
+                return nextFn(...)
+            end
+            table.insert(Restores, function()
+                audio[fnName] = nextFn
+            end)
+        end
+        wrapAudio("playSoundId")
+        wrapAudio("playSound")
+        wrapAudio("play")
+    end
+
+    local lastFireCount, lastFireWeapon, lastShotAt = nil, nil, 0
+    local function noteShot(source)
+        if not Config.ShootSounds then
+            return
+        end
+        local now = os.clock()
+        if now - lastShotAt < 0.012 then
+            return
+        end
+        lastShotAt = now
+        playShootSound(false, true)
+    end
     table.insert(Connections, RunService.RenderStepped:Connect(function()
         if not Config.ShootSounds then
             lastFireCount, lastFireWeapon = nil, nil
@@ -6188,7 +5736,7 @@ if Modules then
             lastFireCount, lastFireWeapon = nil, nil
             return
         end
-        local count = tonumber(weapon._fireCount)
+        local count = tonumber(weapon._fireCount) or tonumber(weapon._shotCount) or tonumber(weapon._bulletsFired)
         if typeof(count) ~= "number" then
             return
         end
@@ -6202,10 +5750,10 @@ if Modules then
             return
         end
         if count > lastFireCount then
-            local shots = math.min(count - lastFireCount, 8)
+            local shots = math.min(count - lastFireCount, 12)
             lastFireCount = count
             for _ = 1, shots do
-                playShootSound(false, true)
+                noteShot("fireCount")
             end
         elseif count < lastFireCount then
             lastFireCount = count
@@ -6215,9 +5763,34 @@ if Modules then
     if Modules and Modules.NetworkClient and type(Modules.NetworkClient.send) == "function" then
         local network = Modules.NetworkClient
         local nextSend = network.send
+        local reverseTime = false
+        local lastRepTime = nil
         local shootSend = function(self, name, ...)
-            if name == "newbullets" and Config.ShootSounds then
-                playShootSound()
+            if Config.ShootSounds and (name == "newbullets" or name == "newshot" or name == "shoot" or name == "fire") then
+                noteShot(name)
+            end
+            if name == "repupdate" and Config.MovementBypass then
+                local fromExecutor = false
+                if checkcaller then
+                    local okCaller, isCaller = pcall(checkcaller)
+                    fromExecutor = okCaller and isCaller and true or false
+                end
+                if not fromExecutor then
+                    local args = { ... }
+                    local newTime = args[4]
+                    if typeof(newTime) == "number" then
+                        if not reverseTime then
+                            lastRepTime = newTime
+                        end
+                        if lastRepTime and (newTime - lastRepTime) > (1 / 60) then
+                            reverseTime = false
+                            lastRepTime = newTime
+                        end
+                        reverseTime = not reverseTime
+                        args[4] = lastRepTime or newTime
+                        return nextSend(self, name, table.unpack(args))
+                    end
+                end
             end
             return nextSend(self, name, ...)
         end
@@ -6232,7 +5805,7 @@ if Modules then
         local nextNew = Modules.BulletObject.new
         local shootNew = function(data, ...)
             if Config.ShootSounds and type(data) == "table" then
-                playShootSound()
+                noteShot("bullet")
             end
             return nextNew(data, ...)
         end
@@ -6241,6 +5814,18 @@ if Modules then
             if Modules.BulletObject.new == shootNew then
                 Modules.BulletObject.new = nextNew
             end
+        end)
+    end
+    if Modules and Modules.Effects and type(Modules.Effects.muzzleflash) == "function" then
+        local nextFlash = Modules.Effects.muzzleflash
+        Modules.Effects.muzzleflash = function(...)
+            if Config.ShootSounds then
+                noteShot("muzzle")
+            end
+            return nextFlash(...)
+        end
+        table.insert(Restores, function()
+            Modules.Effects.muzzleflash = nextFlash
         end)
     end
 else
@@ -6324,41 +5909,13 @@ else
         end
         return Vector3.zero
     end
-    local function weaponClassName(weapon)
-        local data = weapon and (weapon._weaponData or weapon.weaponData or weapon._data)
-        local label = ""
-        if type(data) == "table" then
-            label = tostring(data.displayname or data.displayName or data.name or data.Name or data.type or "")
-        end
-        if label == "" and weapon and type(weapon._name) == "string" then
-            label = weapon._name
-        end
-        local upper = string.upper(label)
-        local groups = {
-            { "pistol", { "M9", "G17", "M1911", "DEAGLE", "DESERT", "MP412", "REX", "93R", "TEC", "FIVE", "MAKAROV", "M45", "ZIP", "SERBU", "SFG", "PISTOL" } },
-            { "shotgun", { "KS-23", "KS23", "REMINGTON 870", "DBV", "SAIGA", "STEVENS", "SPAS", "AA-12", "USAS", "SHOTGUN" } },
-            { "sniper", { "INTERVENTION", "REMINGTON 700", "AWS", "AWM", "TRG", "MOSIN", "SVD", "WA2000", "BFG", "HECATE", "SCOUT", "DRAGUNOV", "OBREZ", "SNIPER" } },
-            { "lmg", { "M60", "HBAR", "MG36", "COLT LMG", "L86", "HAMR", "RPK", "HK21", "MG3", "LMG" } },
-            { "pdw", { "MP5", "MP7", "MP10", "UMP", "P90", "VECTOR", "KRISS", "MAC10", "MP40", "PPSH", "TOMMY", "SR-3", "PDW", "SMG" } },
-        }
-        for _, group in groups do
-            for _, token in group[2] do
-                if string.find(upper, token, 1, true) then
-                    return group[1]
-                end
-            end
-        end
-        if upper ~= "" then
-            return "assault"
-        end
-        return nil
-    end
     table.insert(Connections, RunService.Heartbeat:Connect(function(dt)
         dt = math.clamp(dt or 0.016, 0, 0.05)
         local object = charInterface and charInterface.getCharacterObject and charInterface.getCharacterObject()
         local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
         local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
-        local className = weaponClassName(weapon)
+        local classify = (getgenv().Aim and getgenv().Aim.Classify) or (env.Aim and env.Aim.Classify)
+        local className = type(classify) == "function" and classify(weapon) or nil
         if className then
             getgenv().TapologyWeaponClass = className
         end
@@ -6376,112 +5933,39 @@ else
         end
         if Config.NoMoveCooldown and object then
             pcall(function()
-                if object._moveCooldown ~= nil then
-                    object._moveCooldown = 0
-                end
-                if object._jumpCooldown ~= nil then
-                    object._jumpCooldown = 0
-                end
-                if object._nextJump ~= nil then
-                    object._nextJump = 0
-                end
+                object._moveCooldown = 0
+                object._jumpCooldown = 0
+                object._nextJump = 0
+                object._lastJumpTime = 0
+                object._lastLandTime = 0
+                object.dived = false
+                object.sprintDisabled = false
             end)
         end
         local root = rootPartOf(object)
-        local cam = camera()
-        local moving = Config.WalkSpeed or Config.SlideBoost or Config.CircleJump or Config.ZigzagJump or Config.Pathfind
-        if moving and root then
+        if Config.WalkSpeed then
+            local speed = math.clamp(tonumber(Config.SetSpeed) or 50, 1, 200)
+            if Config.SlideBoost and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+                speed = math.clamp(speed + (tonumber(Config.SlideBoostSpeed) or 70), 1, 200)
+            end
             pcall(function()
-                if object._speed ~= nil then
-                    object._speed = math.max(tonumber(object._speed) or 0, Config.WalkSpeed and Config.SetSpeed or 16)
+                if object and object._speed ~= nil then
+                    object._speed = math.max(tonumber(object._speed) or 0, speed)
+                end
+                if object and object._baseWalkSpeed ~= nil then
+                    object._baseWalkSpeed = speed
+                end
+                if object and type(object.setBaseWalkSpeed) == "function" then
+                    object:setBaseWalkSpeed(speed)
                 end
             end)
-            local wish = wishDirection(cam)
-            local speed = Config.WalkSpeed and (tonumber(Config.SetSpeed) or 50) or 16
-            if Config.SlideBoost and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-                speed += tonumber(Config.SlideBoostSpeed) or 70
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.WalkSpeed = speed
             end
-            if Config.CircleJump and UserInputService:IsKeyDown(Enum.KeyCode.Z) then
-                circleCenter = circleCenter or root.Position
-                circleAngle += dt * 4
-                local offset = Vector3.new(math.cos(circleAngle), 0, math.sin(circleAngle)) * 6
-                wish = (circleCenter + offset - root.Position)
-                wish = Vector3.new(wish.X, 0, wish.Z)
-                if wish.Magnitude > 1e-3 then
-                    wish = wish.Unit
-                end
-                speed = math.max(speed, 40)
-            else
-                circleCenter = nil
-            end
-            if Config.ZigzagJump and UserInputService:IsKeyDown(Enum.KeyCode.F) then
-                local side = math.sin(os.clock() * 8)
-                local right = cam and cam.CFrame.RightVector or Vector3.new(1, 0, 0)
-                local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
-                local flat = Vector3.new(look.X, 0, look.Z)
-                local forward = flat.Magnitude > 1e-3 and flat.Unit or Vector3.new(0, 0, -1)
-                if wish.Magnitude < 1e-3 then
-                    wish = forward
-                end
-                local mixed = wish + right * side
-                if mixed.Magnitude > 1e-3 then
-                    wish = mixed.Unit
-                end
-                speed = math.max(speed, 36)
-            end
-            if Config.Pathfind then
-                local point = getgenv().TapologyAimPoint
-                if typeof(point) == "Vector3" then
-                    local toward = Vector3.new(point.X - root.Position.X, 0, point.Z - root.Position.Z)
-                    if toward.Magnitude > 4 then
-                        wish = toward.Unit
-                        speed = math.max(speed, Config.WalkSpeed and Config.SetSpeed or 28)
-                    end
-                end
-            end
-            local rate = math.clamp(tonumber(Config.MoveSmooth) or 12, 1, 40)
-            smoothWish = smoothWish:Lerp(wish * speed, 1 - math.exp(-dt * rate))
-            if smoothWish.Magnitude > 0.05 then
-                root.CFrame = root.CFrame + smoothWish * dt
-            end
-        else
-            smoothWish = smoothWish:Lerp(Vector3.zero, 1 - math.exp(-dt * 8))
         end
-        if Config.RemoveDecals then
-            local now = os.clock()
-            if now - decalListedAt > 3 or decalIndex > #decalQueue then
-                decalQueue = {}
-                local roots = {}
-                for _, rootName in { "Map", "Ignore" } do
-                    local folder = workspace:FindFirstChild(rootName)
-                    if folder then
-                        table.insert(roots, folder)
-                    end
-                end
-                if #roots == 0 then
-                    roots = { workspace }
-                end
-                for _, rootFolder in roots do
-                    for _, inst in rootFolder:GetDescendants() do
-                        if inst:IsA("Decal") or inst:IsA("Texture") then
-                            table.insert(decalQueue, inst)
-                        end
-                    end
-                end
-                decalIndex = 1
-                decalListedAt = now
-            end
-            local scanned = 0
-            while decalIndex <= #decalQueue and scanned < 25 do
-                local inst = decalQueue[decalIndex]
-                decalIndex += 1
-                if typeof(inst) == "Instance" and inst.Parent and hiddenDecals[inst] == nil and not inst:FindFirstAncestor("TapologyField") then
-                    hiddenDecals[inst] = inst.Transparency
-                    inst.Transparency = 1
-                    scanned += 1
-                end
-            end
-        elseif next(hiddenDecals) then
+        if next(hiddenDecals) then
             local restored = 0
             for inst, transparency in hiddenDecals do
                 hiddenDecals[inst] = nil
@@ -6504,6 +5988,16 @@ else
                     end
                     for _, desc in model:GetDescendants() do
                         if desc:IsA("BasePart") or desc:IsA("Decal") or desc:IsA("Texture") then
+                            local lower = string.lower(desc.Name)
+                            if string.find(lower, "weapon", 1, true)
+                                or string.find(lower, "gun", 1, true)
+                                or string.find(lower, "barrel", 1, true)
+                                or string.find(lower, "sight", 1, true)
+                                or string.find(lower, "mag", 1, true)
+                                or string.find(lower, "stock", 1, true)
+                            then
+                                continue
+                            end
                             desc.LocalTransparencyModifier = 1
                         end
                     end
@@ -6600,7 +6094,7 @@ else
                 end
             end
         end
-        if Config.HeightBypass and Config.JumpPower and root then
+        if Config.HeightBypass and root then
             local now = os.clock()
             local waitFor = math.clamp(tonumber(Config.HeightBypassTime) or 1.5, 0.2, 8)
             if now - lastGroundSnap >= waitFor then
@@ -6615,13 +6109,64 @@ else
             end
         end
     end))
+end
+
+do
+    local function barLayout(gap, length, thick)
+        return {
+            { Name = "top", X = 40, Y = 40 - gap - length / 2, W = thick, H = length, Vertical = true, Flip = true },
+            { Name = "right", X = 40 + gap + length / 2, Y = 40, W = length, H = thick, Vertical = false, Flip = false },
+            { Name = "bottom", X = 40, Y = 40 + gap + length / 2, W = thick, H = length, Vertical = true, Flip = false },
+            { Name = "left", X = 40 - gap - length / 2, Y = 40, W = length, H = thick, Vertical = false, Flip = true },
+        }
+    end
+
+    local function applyBarEdgeFade(grad, fadeIn, fadeOut, flip)
+        local inner = math.clamp(tonumber(fadeIn) or 0, 0, 1)
+        local outer = math.clamp(tonumber(fadeOut) or 0, 0, 1)
+        if flip then
+            grad.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, outer),
+                NumberSequenceKeypoint.new(0.55, math.min(inner, outer) * 0.3),
+                NumberSequenceKeypoint.new(1, inner),
+            })
+        else
+            grad.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, inner),
+                NumberSequenceKeypoint.new(0.45, math.min(inner, outer) * 0.3),
+                NumberSequenceKeypoint.new(1, outer),
+            })
+        end
+    end
+
+    -- Nesting under gethui()/RobloxGui does not paint; mount like Tapology UI on CoreGui.
+    local overlayParent = game:GetService("CoreGui")
+    do
+        local ok = pcall(function()
+            local probe = Instance.new("Folder")
+            probe.Parent = overlayParent
+            probe:Destroy()
+        end)
+        if not ok then
+            local host = gethui and select(2, pcall(gethui))
+            if typeof(host) == "Instance" then
+                overlayParent = host
+            else
+                local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                if pg then
+                    overlayParent = pg
+                end
+            end
+        end
+    end
 
     local crossGui = Instance.new("ScreenGui")
     crossGui.Name = "TapologyCrosshair"
     crossGui.IgnoreGuiInset = true
     crossGui.ResetOnSpawn = false
-    crossGui.DisplayOrder = 20
-    crossGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+    crossGui.DisplayOrder = 190
+    crossGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    crossGui.Parent = overlayParent
     local crossHolder = Instance.new("Frame")
     crossHolder.AnchorPoint = Vector2.new(0.5, 0.5)
     crossHolder.BackgroundTransparency = 1
@@ -6631,9 +6176,18 @@ else
     local crossBars = {}
     for i = 1, 4 do
         local bar = Instance.new("Frame")
+        bar.Name = "Bar" .. i
         bar.AnchorPoint = Vector2.new(0.5, 0.5)
         bar.BorderSizePixel = 0
         bar.Parent = crossHolder
+        local grad = Instance.new("UIGradient")
+        grad.Parent = bar
+        local stroke = Instance.new("UIStroke")
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.LineJoinMode = Enum.LineJoinMode.Miter
+        stroke.Thickness = 1
+        stroke.Enabled = false
+        stroke.Parent = bar
         crossBars[i] = bar
     end
     bindStep("TapologyCrosshair", Enum.RenderPriority.Camera.Value + 120, function()
@@ -6642,12 +6196,11 @@ else
         if not crossHolder.Visible or not cam then
             return
         end
-        local center = cam.ViewportSize * 0.5
         if Config.CrosshairMode == "ingame" then
             local mouse = UserInputService:GetMouseLocation()
             crossHolder.Position = UDim2.fromOffset(mouse.X, mouse.Y)
         else
-            crossHolder.Position = UDim2.fromOffset(center.X, center.Y)
+            crossHolder.Position = UDim2.fromScale(0.5, 0.5)
         end
         local bounce = math.sin(os.clock() * (tonumber(Config.CrosshairBounceSpeed) or 6)) * (tonumber(Config.CrosshairBounce) or 0)
         local gap = math.max(0, (tonumber(Config.CrosshairGap) or 4) + bounce)
@@ -6655,24 +6208,339 @@ else
         local thick = math.clamp(tonumber(Config.CrosshairThickness) or 2, 1, 8)
         crossHolder.Rotation = os.clock() * (tonumber(Config.CrosshairSpinSpeed) or 0) * (tonumber(Config.CrosshairSpin) or 0)
         local colors = { Config.CrosshairColor1, Config.CrosshairColor2, Config.CrosshairColor3, Config.CrosshairColor4 }
-        local layout = {
-            { 40, 40 - gap - length / 2, thick, length },
-            { 40 + gap + length / 2, 40, length, thick },
-            { 40, 40 + gap + length / 2, thick, length },
-            { 40 - gap - length / 2, 40, length, thick },
-        }
+        local fadeIn = Config.CrosshairFadeIn
+        local fadeOut = Config.CrosshairFadeOut
+        local outlineOn = Config.CrosshairOutline == true
+        local outlineColor = Config.CrosshairOutlineColor or Color3.new(0, 0, 0)
+        local layout = barLayout(gap, length, thick)
         for i = 1, 4 do
             local bar = crossBars[i]
             local spot = layout[i]
-            bar.Position = UDim2.fromOffset(spot[1], spot[2])
-            bar.Size = UDim2.fromOffset(spot[3], spot[4])
+            bar.Position = UDim2.fromOffset(spot.X, spot.Y)
+            bar.Size = UDim2.fromOffset(spot.W, spot.H)
             bar.BackgroundColor3 = colors[i] or Color3.new(1, 1, 1)
+            local grad = bar:FindFirstChildOfClass("UIGradient")
+            if grad then
+                grad.Rotation = spot.Vertical and 90 or 0
+                applyBarEdgeFade(grad, fadeIn, fadeOut, spot.Flip)
+            end
+            local stroke = bar:FindFirstChildOfClass("UIStroke")
+            if stroke then
+                stroke.Enabled = outlineOn
+                stroke.Color = outlineColor
+            end
         end
     end)
+
+    local hitGui = Instance.new("ScreenGui")
+    hitGui.Name = "TapologyHitMarkers"
+    hitGui.IgnoreGuiInset = true
+    hitGui.ResetOnSpawn = false
+    hitGui.DisplayOrder = 200
+    hitGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    hitGui.Parent = overlayParent
+    local activeHitMarkers = {}
+
+    local function hitModes()
+        local raw = Config.HitMarkerModes
+        local out = { ["2d"] = false, ["3d"] = false }
+        if type(raw) == "table" then
+            for key, value in raw do
+                if type(key) == "string" and value == true then
+                    out[string.lower(key)] = true
+                elseif type(value) == "string" then
+                    out[string.lower(value)] = true
+                end
+            end
+        elseif type(raw) == "string" then
+            out[string.lower(raw)] = true
+        end
+        if not out["2d"] and not out["3d"] then
+            out["2d"] = true
+        end
+        return out
+    end
+
+    local function buildMarkerBars(parent)
+        local holder = Instance.new("Frame")
+        holder.Name = "Marker"
+        holder.AnchorPoint = Vector2.new(0.5, 0.5)
+        holder.BackgroundTransparency = 1
+        holder.Size = UDim2.fromOffset(80, 80)
+        holder.Rotation = 45
+        holder.Parent = parent
+        local bars = {}
+        for i = 1, 4 do
+            local bar = Instance.new("Frame")
+            bar.Name = "Bar" .. i
+            bar.AnchorPoint = Vector2.new(0.5, 0.5)
+            bar.BorderSizePixel = 0
+            bar.Parent = holder
+            Instance.new("UIGradient").Parent = bar
+            local stroke = Instance.new("UIStroke")
+            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            stroke.LineJoinMode = Enum.LineJoinMode.Miter
+            stroke.Thickness = 1
+            stroke.Enabled = false
+            stroke.Parent = bar
+            bars[i] = bar
+        end
+        return holder, bars
+    end
+
+    local function paintMarker(holder, bars, lifeAlpha)
+        lifeAlpha = math.clamp(tonumber(lifeAlpha) or 1, 0, 1)
+        local gap = math.max(0, tonumber(Config.HitMarkerGap) or 4)
+        local length = math.clamp(tonumber(Config.HitMarkerLength) or 10, 1, 40)
+        local thick = math.clamp(tonumber(Config.HitMarkerThickness) or 2, 1, 8)
+        local colors = {
+            Config.HitMarkerColor1,
+            Config.HitMarkerColor2,
+            Config.HitMarkerColor3,
+            Config.HitMarkerColor4,
+        }
+        local alphas = {
+            Config.HitMarkerAlpha1,
+            Config.HitMarkerAlpha2,
+            Config.HitMarkerAlpha3,
+            Config.HitMarkerAlpha4,
+        }
+        local fadeIn = Config.HitMarkerFadeIn
+        local fadeOut = Config.HitMarkerFadeOut
+        local outlineOn = Config.HitMarkerOutline == true
+        local outlineColor = Config.HitMarkerOutlineColor or Color3.new(0, 0, 0)
+        local layout = barLayout(gap, length, thick)
+        holder.Size = UDim2.fromOffset(80, 80)
+        holder.Rotation = 45
+        for i = 1, 4 do
+            local spot = layout[i]
+            local bar = bars[i]
+            local alpha = math.clamp(tonumber(alphas[i]) or 1, 0, 1) * lifeAlpha
+            bar.Visible = true
+            bar.Position = UDim2.fromOffset(spot.X, spot.Y)
+            bar.Size = UDim2.fromOffset(spot.W, spot.H)
+            bar.BackgroundColor3 = colors[i] or Color3.new(1, 1, 1)
+            bar.BackgroundTransparency = 1 - alpha
+            local grad = bar:FindFirstChildOfClass("UIGradient")
+            if grad then
+                grad.Rotation = spot.Vertical and 90 or 0
+                applyBarEdgeFade(grad, fadeIn, fadeOut, spot.Flip)
+            end
+            local stroke = bar:FindFirstChildOfClass("UIStroke")
+            if stroke then
+                stroke.Enabled = outlineOn and alpha > 0.05
+                stroke.Color = outlineColor
+                stroke.Transparency = 1 - alpha
+            end
+        end
+    end
+
+    local function resolveHitPos(player, part)
+        local pos
+        if typeof(part) == "Instance" and part:IsA("BasePart") then
+            pos = part.Position
+        elseif typeof(part) == "Vector3" then
+            pos = part
+        end
+        local char = typeof(player) == "Instance" and player:IsA("Player") and player.Character
+        if not pos and typeof(part) == "string" and char then
+            local named = char:FindFirstChild(part) or char:FindFirstChild(part, true)
+            if named and named:IsA("BasePart") then
+                pos = named.Position
+            end
+        end
+        if not pos and typeof(player) == "Instance" and player:IsA("Player") then
+            pcall(function()
+                local modules = env._TapologyModules
+                local rep = modules and modules.ReplicationInterface
+                local entry = rep and (rep.getEntry and (rep.getEntry(rep, player) or rep.getEntry(player)))
+                if type(entry) ~= "table" then
+                    return
+                end
+                if typeof(part) == "string" then
+                    local third = entry._thirdPersonObject
+                    local model = third and (third._model or third.model)
+                    if typeof(model) == "Instance" then
+                        local named = model:FindFirstChild(part) or model:FindFirstChild(part, true)
+                        if named and named:IsA("BasePart") then
+                            pos = named.Position
+                            return
+                        end
+                    end
+                    local hash = entry._characterHash or entry._hash
+                    local body = hash and hash[part]
+                    if body and typeof(body) == "Instance" and body:IsA("BasePart") then
+                        pos = body.Position
+                        return
+                    end
+                end
+                if typeof(entry._receivedPosition) == "Vector3" then
+                    pos = entry._receivedPosition
+                elseif typeof(entry.getPosition) == "function" then
+                    local p = entry:getPosition()
+                    if typeof(p) == "Vector3" then
+                        pos = p
+                    end
+                end
+            end)
+        end
+        if not pos and char then
+            local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+            if root and root:IsA("BasePart") then
+                pos = root.Position
+            end
+        end
+        return pos
+    end
+
+    local function spawnOne(mode, worldPos)
+        local duration = math.clamp(tonumber(Config.HitMarkerDuration) or 0.35, 0.05, 5)
+        local born = os.clock()
+        if mode == "3d" then
+            if typeof(worldPos) ~= "Vector3" then
+                return
+            end
+            local part = Instance.new("Part")
+            part.Name = "TapologyHitMarkerAnchor"
+            part.Anchored = true
+            part.CanCollide = false
+            part.CanQuery = false
+            part.CanTouch = false
+            part.Transparency = 1
+            part.Size = Vector3.new(0.2, 0.2, 0.2)
+            part.CFrame = CFrame.new(worldPos)
+            part.Parent = workspace.CurrentCamera or workspace
+            local bill = Instance.new("BillboardGui")
+            bill.Name = "TapologyHitMarker3D"
+            bill.AlwaysOnTop = true
+            bill.LightInfluence = 0
+            bill.Size = UDim2.fromOffset(80, 80)
+            bill.Adornee = part
+            bill.Parent = part
+            local holder, bars = buildMarkerBars(bill)
+            holder.Position = UDim2.fromScale(0.5, 0.5)
+            paintMarker(holder, bars, 1)
+            table.insert(activeHitMarkers, {
+                Mode = "3d",
+                Born = born,
+                Duration = duration,
+                Part = part,
+                Bill = bill,
+                Holder = holder,
+                Bars = bars,
+                World = worldPos,
+            })
+        else
+            local holder, bars = buildMarkerBars(hitGui)
+            holder.Position = UDim2.fromScale(0.5, 0.5)
+            paintMarker(holder, bars, 1)
+            table.insert(activeHitMarkers, {
+                Mode = "2d",
+                Born = born,
+                Duration = duration,
+                Holder = holder,
+                Bars = bars,
+            })
+        end
+    end
+
+    local function spawnHitMarker(worldPos)
+        if not Config.HitMarkers then
+            return
+        end
+        local modes = hitModes()
+        if modes["2d"] then
+            spawnOne("2d", worldPos)
+        end
+        if modes["3d"] then
+            spawnOne("3d", worldPos)
+        end
+    end
+
+    env._TapologyOnHitMarker = function(player, part)
+        if not Config.HitMarkers then
+            return
+        end
+        spawnHitMarker(resolveHitPos(player, part))
+    end
+
+    bindStep("TapologyHitMarkers", Enum.RenderPriority.Camera.Value + 121, function()
+        local now = os.clock()
+        local cam = workspace.CurrentCamera
+        for i = #activeHitMarkers, 1, -1 do
+            local marker = activeHitMarkers[i]
+            local age = now - marker.Born
+            local duration = marker.Duration or 0.35
+            if age >= duration then
+                if marker.Bill then
+                    pcall(function()
+                        marker.Bill:Destroy()
+                    end)
+                end
+                if marker.Part then
+                    pcall(function()
+                        marker.Part:Destroy()
+                    end)
+                end
+                if marker.Holder then
+                    pcall(function()
+                        marker.Holder:Destroy()
+                    end)
+                end
+                table.remove(activeHitMarkers, i)
+            else
+                local life = 1 - (age / duration)
+                paintMarker(marker.Holder, marker.Bars, life)
+                if marker.Mode == "2d" and marker.Holder then
+                    marker.Holder.Position = UDim2.fromScale(0.5, 0.5)
+                elseif marker.Mode == "3d" and marker.Part and typeof(marker.World) == "Vector3" then
+                    marker.Part.CFrame = CFrame.new(marker.World)
+                    if cam then
+                        local sp, visible = cam:WorldToViewportPoint(marker.World)
+                        if marker.Bill then
+                            marker.Bill.Enabled = visible ~= false and sp.Z > 0
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
     table.insert(Restores, function()
+        env._TapologyOnHitMarker = nil
+        for _, marker in activeHitMarkers do
+            if marker.Bill then
+                pcall(function()
+                    marker.Bill:Destroy()
+                end)
+            end
+            if marker.Part then
+                pcall(function()
+                    marker.Part:Destroy()
+                end)
+            end
+            if marker.Holder then
+                pcall(function()
+                    marker.Holder:Destroy()
+                end)
+            end
+        end
+        table.clear(activeHitMarkers)
         crossGui:Destroy()
+        hitGui:Destroy()
     end)
 end
+
+Config.MovementBypass = Config.MovementBypass == true
+Config.NoFallDamage = Config.NoFallDamage == true
+Config.NoStamina = Config.NoStamina == true
+Config.NoMoveCooldown = Config.NoMoveCooldown == true
+Config.WalkSpeed = Config.WalkSpeed == true
+Config.JumpPower = Config.JumpPower == true
+Config.HeightBypass = Config.HeightBypass == true
+Config.HideViewmodel = Config.HideViewmodel == true
+Config.RemoveArms = Config.RemoveArms == true
+print("[Tapology] Loaded bypasses")
 
 env.Misc = {
     Config = Config,
@@ -8552,6 +8420,8 @@ TextureIds = {
     footprint = "rbxassetid://105161323431879",
     plume = "rbxassetid://87992314886809",
 }
+getgenv()._TapologyTextureIds = TextureIds
+getgenv()._TapologyOOVArrow = OOVArrowAsset
 
 do
     local okAura, errAura = pcall(main)
@@ -8562,9 +8432,71 @@ do
 end
 
 end
+loadRemote("weather")
 loadRemote("hiteffect")
 loadRemote("killeffect")
+do
+    -- Always refresh tracer/rage from local so hit hooks pick up fixes.
+    local tracers = getgenv().Tracers
+    if type(tracers) == "table" and type(tracers.Unload) == "function" then
+        pcall(tracers.Unload)
+    end
+    getgenv().Tracers = nil
+    local rage = getgenv().Rage
+    if type(rage) == "table" and type(rage.Unload) == "function" then
+        pcall(rage.Unload)
+    end
+    getgenv().Rage = nil
+end
 loadRemote("tracer")
+loadRemote("rage")
+print("[Tapology] Loaded Modules")
+if type(getgenv().Weather) ~= "table" then
+    warn("[Tapology] weather still missing after load")
+end
+
+do
+    print("[Tapology] Loading assets...")
+    local ContentProvider = game:GetService("ContentProvider")
+    local ids = { OOVArrowAsset }
+    local textures = getgenv()._TapologyTextureIds
+    if type(textures) == "table" then
+        for _, id in textures do
+            if type(id) == "string" and id ~= "" then
+                ids[#ids + 1] = id
+            end
+        end
+    end
+    local uiCfg = (getgenv().Tapology or getgenv().Library or {}).Config
+    if type(uiCfg) == "table" and type(uiCfg.Logo) == "string" then
+        ids[#ids + 1] = uiCfg.Logo
+    end
+    local holders = {}
+    for _, id in ids do
+        local decal = Instance.new("Decal")
+        decal.Texture = id
+        holders[#holders + 1] = decal
+    end
+    local okPreload, preloadErr = pcall(function()
+        ContentProvider:PreloadAsync(holders)
+    end)
+    for _, decal in holders do
+        decal:Destroy()
+    end
+    if okPreload then
+        print("[Tapology] Loaded assets")
+        getgenv()._TapologyAssetsLoaded = true
+    else
+        warn("[Tapology] asset preload failed:", preloadErr)
+        getgenv()._TapologyAssetsLoaded = false
+    end
+    local remain = 5 - (os.clock() - BootStart)
+    if remain > 0 then
+        task.wait(remain)
+    end
+    print("[Tapology] Ready")
+end
+
 local ESP = getgenv().ESP
 local Aim = getgenv().Aim
 local World = getgenv().World
@@ -8608,7 +8540,7 @@ do
     else
         pagesOk = false
     end
-    if getgenv()._TapologyMenuBuilt == menuGeneration and tabCount >= 7 and pagesOk then
+    if getgenv()._TapologyMenuBuilt == menuGeneration and tabCount >= 6 and pagesOk then
         return
     end
 
@@ -8640,8 +8572,8 @@ assert(UI and type(UI.Tab) == "function", "Library failed to load")
 assert(ESP, "ESP failed to load")
 assert(Aim, "Aim failed to embed")
 assert(World, "World failed to embed")
-assert(Rage, "Rage failed to embed")
 assert(Misc, "Misc failed to embed")
+assert(Tracers, "Tracers failed to embed")
 
 local function aim()
     return getgenv().Aim
@@ -8725,10 +8657,60 @@ local worldTab = ensureTab("world")
 local miscTab = ensureTab("misc")
 getgenv()._TapologyServerPage = ensureTab("server")
 
+local function rageFlags()
+    return getgenv().TapologyRageFlags or (getgenv().Rage and getgenv().Rage.Flags)
+end
+local function setRageFlag(name, value)
+    local flags = rageFlags()
+    if type(flags) == "table" then
+        local flag = flags[name]
+        if type(flag) ~= "table" then
+            flags[name] = { Value = value }
+        else
+            flag.Value = value
+        end
+    end
+    if getgenv().Rage and type(getgenv().Rage.SetFlag) == "function" then
+        getgenv().Rage.SetFlag(name, value)
+    end
+end
+local function getRageFlag(name, fallback)
+    local flags = rageFlags()
+    local flag = flags and flags[name]
+    if type(flag) == "table" and flag.Value ~= nil then
+        return flag.Value
+    end
+    return fallback
+end
+
 local function buildLegitUi()
-local editingClass = aim().Config.Class or "assault"
+local editingClass = aim().Config.Class or "assault rifle"
+if type(aim().Classify) == "function" then
+    editingClass = aim().Classify({ _name = editingClass }) or editingClass
+elseif type(editingClass) == "string" then
+    local aliases = {
+        assault = "assault rifle",
+        sniper = "sniper rifle",
+    }
+    editingClass = aliases[editingClass] or editingClass
+end
+if not (aim().Config.Profiles and aim().Config.Profiles[editingClass]) then
+    editingClass = "assault rifle"
+end
+aim().Config.Class = editingClass
 local function touch(key, value)
     local profiles = aim().Config.Profiles
+    if editingClass == "global" then
+        if type(profiles) == "table" then
+            for _, profile in profiles do
+                if type(profile) == "table" then
+                    profile[key] = value
+                end
+            end
+        end
+        aim().Config[key] = value
+        return
+    end
     local profile = profiles and profiles[editingClass]
     if profile then
         profile[key] = value
@@ -8778,7 +8760,10 @@ local maxDistance = mouseKids:Slider("max distance", { Min = 50, Max = 2000, Def
 end)
 
 local silentEnable = silentBox:Toggle("enable", Aim.Config.SilentEnabled, function(on)
-    touch("SilentEnabled", on)
+    touch("SilentEnabled", on and true or false)
+    if aim().Rehook then
+        pcall(aim().Rehook)
+    end
 end)
 silentEnable:Keybind()
 local silentKids = silentEnable:Children()
@@ -8800,8 +8785,14 @@ end)
 local hitChance = silentKids:Slider("hit chance", { Min = 1, Max = 100, Default = Aim.Config.HitChance, Suffix = "%" }, function(value)
     touch("HitChance", value)
 end)
+silentKids:Dropdown("target part", { Values = { "head", "torso" }, Default = Aim.Config.TargetPart }, function(value)
+    touch("TargetPart", value)
+end)
+silentKids:Slider("max distance", { Min = 50, Max = 2000, Default = Aim.Config.MaxDistance, Suffix = "st" }, function(value)
+    touch("MaxDistance", value)
+end)
 if not Aim.SilentAvailable then
-    Library:Notify("silent aim needs a rejoin with the debug flag (esp turns it on)", 4)
+    Library:Notify("silent aim needs pf modules (rejoin with actors bypass)", 4)
 end
 
 local classColumns = legit.Frame and legit.Frame:FindFirstChild("Columns")
@@ -8811,23 +8802,95 @@ if classColumns then
         oldBar:Destroy()
     end
     local inset = classColumns.Position.X.Offset
-    local barHeight = 40
+    local theme = UI.Config and UI.Config.Theme or {}
+    local pad = (UI.Config and UI.Config.Spacing) or 6
+    local titleHeight = ((UI.Config and UI.Config.TextSize) or 12) + 8
+    local fieldHeight = ((UI.Config and UI.Config.TextSize) or 12) + 6
+    local contentPad = pad + 2
+    local barHeight = titleHeight + 1 + contentPad + fieldHeight + contentPad
     local gap = 10
     local bar = Instance.new("Frame")
     bar.Name = "ClassBar"
-    bar.BackgroundTransparency = 1
+    bar.BackgroundColor3 = theme.Background or Color3.fromRGB(36, 36, 38)
+    bar.BorderSizePixel = 0
     bar.ClipsDescendants = false
     bar.Position = UDim2.fromOffset(inset, inset)
     bar.Size = UDim2.new(1, -(inset * 2), 0, barHeight)
     bar.ZIndex = 5
+    bar:SetAttribute("TapologyGroupbox", true)
     bar.Parent = legit.Frame
+    local barStroke = Instance.new("UIStroke")
+    barStroke.Thickness = 1
+    barStroke.Color = theme.Shadow or Color3.fromRGB(8, 8, 10)
+    barStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    barStroke.LineJoinMode = Enum.LineJoinMode.Miter
+    barStroke.Parent = bar
+    local rim = Instance.new("Frame")
+    rim.Name = "Rim"
+    rim.BackgroundTransparency = 1
+    rim.Position = UDim2.fromOffset(1, 1)
+    rim.Size = UDim2.new(1, -2, 1, -2)
+    rim.ZIndex = 3
+    rim.Parent = bar
+    local rimStroke = Instance.new("UIStroke")
+    rimStroke.Thickness = 1
+    rimStroke.Color = theme.Highlight or Color3.fromRGB(54, 54, 60)
+    rimStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    rimStroke.LineJoinMode = Enum.LineJoinMode.Miter
+    rimStroke.Parent = rim
+    local barShade = Instance.new("UIGradient")
+    barShade.Rotation = 90
+    barShade.Color = ColorSequence.new(Color3.new(1.08, 1.08, 1.08), Color3.new(0.88, 0.88, 0.88))
+    barShade.Parent = bar
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(pad + 2, 0)
+    title.Size = UDim2.new(1, -(pad + 2) * 2, 0, titleHeight)
+    title.FontFace = UI.Font
+    title.TextSize = (UI.Config and UI.Config.TextSize) or 12
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = theme.Text or Color3.fromRGB(230, 230, 232)
+    title.Text = "weapon class"
+    title.ZIndex = 6
+    title.Parent = bar
+    local sep = Instance.new("Frame")
+    sep.Name = "Separator"
+    sep.BorderSizePixel = 0
+    sep.BackgroundColor3 = theme.Outline or Color3.fromRGB(56, 56, 60)
+    sep.Position = UDim2.fromOffset(pad, titleHeight)
+    sep.Size = UDim2.new(1, -pad * 2, 0, 1)
+    sep.ZIndex = 6
+    sep.Parent = bar
+    local content = Instance.new("Frame")
+    content.Name = "Content"
+    content.BackgroundTransparency = 1
+    content.Position = UDim2.fromOffset(pad, titleHeight + 1 + contentPad)
+    content.Size = UDim2.new(1, -pad * 2, 0, fieldHeight)
+    content.ZIndex = 6
+    content.Parent = bar
     local barLayout = Instance.new("UIListLayout")
     barLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    barLayout.Parent = bar
+    barLayout.Padding = UDim.new(0, 0)
+    barLayout.Parent = content
     classColumns.Position = UDim2.fromOffset(inset, inset + barHeight + gap)
-    UI.Dropdown(bar, "weapon class", {
-        Values = Aim.Classes or { "assault", "pdw", "lmg", "sniper", "shotgun", "pistol" },
+    UI.Dropdown(content, "", {
+        Values = Aim.Classes or {
+            "assault rifle",
+            "battle rifle",
+            "carbine",
+            "pdw",
+            "lmg",
+            "dmr",
+            "sniper rifle",
+            "shotgun",
+            "pistol",
+            "machine pistol",
+            "revolver",
+            "other",
+        },
         Default = editingClass,
+        Flag = "legit/weapon class",
     }, function(value)
         editingClass = value
         aim().Config.Class = value
@@ -8836,294 +8899,204 @@ if classColumns then
             return
         end
         mouseEnable:Set(profile.MouseEnabled)
-        silentEnable:Set(profile.SilentEnabled)
         mouseFov:Set(profile.MouseFOV)
-        silentFov:Set(profile.SilentFOV)
         mouseShow:Set(profile.MouseShowFOV)
-        silentShow:Set(profile.SilentShowFOV)
         mouseOrigin:Set(profile.MouseFOVOrigin)
-        silentOrigin:Set(profile.SilentFOVOrigin)
         mouseSmooth:Set(profile.Smoothness)
         mouseKey:Set(profile.MouseKey)
         targetPart:Set(profile.TargetPart)
         visibleCheck:Set(profile.VisibleCheck)
         maxDistance:Set(profile.MaxDistance)
+        silentEnable:Set(profile.SilentEnabled)
+        silentFov:Set(profile.SilentFOV)
+        silentShow:Set(profile.SilentShowFOV)
+        silentOrigin:Set(profile.SilentFOVOrigin)
         hitChance:Set(profile.HitChance)
     end)
 end
 end
 buildLegitUi()
 
+local rageUiBuilt = false
 local function buildRageUi()
-local rageBot = rageTab:Groupbox("ragebot", "left")
-local antiAim = rageTab:Groupbox("anti aim", "left")
-local visualizing = rageTab:Groupbox("visualizing", "left")
-local fakeLag = rageTab:Groupbox("fake lag", "right")
+    local rage = getgenv().Rage
+    local cfg = rage and rage.Config
+    if not cfg then
+        return false
+    end
+    if rageUiBuilt then
+        return true
+    end
+    rageUiBuilt = true
+    local main = rageTab:Groupbox("ragebot", "left")
+    local extra = rageTab:Groupbox("extra", "right")
 
-rage().Config.WhitelistFriendlyStatus = true
-rage().Config.ShootEffects = true
-if rage().Config.Mode ~= "edge" then
-    rage().Config.Mode = "default"
-end
-
-local rageEnable = rageBot:Toggle("enable", Rage.Config.Enabled, function(on)
-    rage().SetEnabled(on)
-end)
-rageEnable:Keybind()
-local rageKids = rageEnable:Children()
-rageKids:Dropdown("mode", {
-    Values = { "default", "edge" },
-    Default = Rage.Config.Mode == "edge" and "edge" or "default",
-}, function(value)
-    rage().Config.Mode = value == "edge" and "edge" or "default"
-end)
-rageKids:Slider("fire position", {
-    Min = 0,
-    Max = 12,
-    Default = math.clamp(tonumber(Rage.Config.FirePositionOffset) or 10, 0, 12),
-    Decimals = 1,
-    Suffix = "st",
+    local enabled = main:Toggle("enabled", cfg.Enabled == true, function(on)
+        local live = getgenv().Rage
+        local liveCfg = live and live.Config
+        if liveCfg then
+            liveCfg.Enabled = on and true or false
+        end
+        if live and live.SetEnabled then
+            live.SetEnabled(on)
+        end
+    end)
+    enabled:Keybind()
+    main:Dropdown("priority", {
+        Values = { "Closest to Crosshair", "Closest to Local", "Lowest Health" },
+        Default = cfg.Priority or "Closest to Crosshair",
     }, function(value)
-    rage().Config.FirePositionOffset = value
-    rage().Config.FirePositionScanning = value > 0
-end)
-rageKids:Slider("hit offset", {
-    Min = 0,
-    Max = 12,
-    Default = math.clamp(tonumber(Rage.Config.HitPositionOffset) or 10, 0, 12),
-    Decimals = 1,
-    Suffix = "st",
-}, function(value)
-    rage().Config.HitPositionOffset = value
-    rage().Config.HitPositionScanning = value > 0
-end)
-rageKids:Dropdown("priority", {
-    Values = { "Closest to Crosshair", "Closest to Local", "Lowest Health" },
-    Default = Rage.Config.Priority or "Closest to Crosshair",
-}, function(value)
-    rage().Config.Priority = value
-end)
-rageKids:Slider("targets", {
-    Min = 1,
-    Max = 12,
-    Default = math.clamp(math.floor(tonumber(Rage.Config.MaxTargets) or 12), 1, 12),
-    Decimals = 0,
-}, function(value)
-    rage().Config.MaxTargets = value
-end)
-rageKids:Toggle("prediction", Rage.Config.Prediction ~= false, function(on)
-    rage().Config.Prediction = on
-end)
-local resolverToggle = rageKids:Toggle("resolver", Rage.Config.Resolver, function(on)
-    rage().Config.Resolver = on
-end)
-local resolverKids = resolverToggle:Children()
-resolverKids:Slider("strength", {
-    Min = 0.5,
-    Max = 10,
-    Default = Rage.Config.ResolverStrength or 4,
-    Decimals = 1,
-    Suffix = "st",
-}, function(value)
-    rage().Config.ResolverStrength = value
-end)
-resolverKids:Slider("cooldown", {
-    Min = 0.1,
-    Max = 5,
-    Default = Rage.Config.ResolverCooldown or 1,
-    Decimals = 1,
-    Suffix = "s",
-}, function(value)
-    rage().Config.ResolverCooldown = value
-end)
-local perf = rageEnable:Settings("performance")
-perf:Slider("bullet checks", {
-    Min = 4,
-    Max = 80,
-    Default = Rage.Config.MaxBulletChecks or 40,
-    Decimals = 0,
-}, function(value)
-    rage().Config.MaxBulletChecks = value
-end)
-perf:Slider("frame checks", {
-    Min = 8,
-    Max = 256,
-    Default = Rage.Config.MaxFrameChecks or 128,
-    Decimals = 0,
-}, function(value)
-    rage().Config.MaxFrameChecks = value
-end)
-perf:Slider("scan budget", {
-    Min = 1,
-    Max = 8,
-    Default = Rage.Config.ScanBudgetMs or 5,
-    Decimals = 1,
-    Suffix = "ms",
-}, function(value)
-    rage().Config.ScanBudgetMs = value
-end)
-perf:Dropdown("scan type", {
-    Values = { "V1", "V2" },
-    Default = Rage.Config.HitPositionScanMode == "V2" and "V2" or "V1",
-}, function(value)
-    rage().Config.HitPositionScanMode = value == "V2" and "V2" or "V1"
-end)
-perf:Toggle("show scan range", Rage.Config.ShowScanRange, function(on)
-    rage().Config.ShowScanRange = on
-end)
-perf:Slider("scan range", {
-    Min = 5,
-    Max = 400,
-    Default = Rage.Config.ScanRangeVisual or 80,
-    Suffix = "st",
-}, function(value)
-    rage().Config.ScanRangeVisual = value
-end)
-if not Rage.Available then
-    Library:Notify("rage needs a rejoin with the debug flag (visuals turns it on)", 4)
-end
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.Priority = value
+        end
+    end)
+    main:Dropdown("mode", {
+        Values = { "default", "edge" },
+        Default = cfg.Mode == "edge" and "edge" or "default",
+    }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.Mode = value
+        end
+    end)
+    main:Toggle("use fov", cfg.UseFOV == true, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.UseFOV = on and true or false
+        end
+    end)
+    main:Slider("fov radius", { Min = 50, Max = 2000, Default = tonumber(cfg.FOVRadius) or 350, Suffix = "px" }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.FOVRadius = value
+        end
+    end)
+    main:Slider("max distance", { Min = 50, Max = 3000, Default = tonumber(cfg.MaxDistance) or 1500, Suffix = "st" }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.MaxDistance = value
+        end
+    end)
+    main:Toggle("fire position scan", cfg.FirePositionScanning ~= false, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.FirePositionScanning = on and true or false
+        end
+    end)
+    main:Slider("fire position offset", { Min = 1, Max = 20, Default = tonumber(cfg.FirePositionOffset) or 10, Suffix = "st" }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.FirePositionOffset = value
+        end
+    end)
+    main:Toggle("hit position scan", cfg.HitPositionScanning ~= false, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.HitPositionScanning = on and true or false
+        end
+    end)
+    main:Slider("hit position offset", { Min = 1, Max = 20, Default = tonumber(cfg.HitPositionOffset) or 10, Suffix = "st" }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.HitPositionOffset = value
+        end
+    end)
+    main:Toggle("prediction", cfg.Prediction ~= false, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.Prediction = on and true or false
+        end
+    end)
+    main:Toggle("shoot effects", cfg.ShootEffects ~= false, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.ShootEffects = on and true or false
+        end
+    end)
 
-local aaEnable = antiAim:Toggle("enable", Rage.Config.AntiAim, function(on)
-    rage().Config.AntiAim = on
-end)
-aaEnable:Keybind()
-local aaKids = aaEnable:Children()
-local aaTypes = { "static", "sine", "jitter", "ways", "180" }
-aaKids:Dropdown("pitch type", {
-    Values = aaTypes,
-    Default = Rage.Config.PitchType or "static",
-}, function(value)
-    rage().Config.PitchType = value
-end)
-aaKids:Slider("pitch", {
-    Min = -89,
-    Max = 89,
-    Default = Rage.Config.PitchAmount or 0,
-    Decimals = 1,
-    Suffix = "deg",
-}, function(value)
-    rage().Config.PitchAmount = value
-end)
-aaKids:Slider("pitch ways", {
-    Min = 2,
-    Max = 10,
-    Default = Rage.Config.PitchWays or 7,
-    Decimals = 0,
-}, function(value)
-    rage().Config.PitchWays = value
-end)
-aaKids:Dropdown("yaw type", {
-    Values = aaTypes,
-    Default = Rage.Config.YawType or "static",
-}, function(value)
-    rage().Config.YawType = value
-end)
-aaKids:Slider("yaw", {
-    Min = -180,
-    Max = 180,
-    Default = Rage.Config.YawAmount or 180,
-    Decimals = 1,
-    Suffix = "deg",
-}, function(value)
-    rage().Config.YawAmount = value
-end)
-aaKids:Slider("yaw ways", {
-    Min = 2,
-    Max = 10,
-    Default = Rage.Config.YawWays or 7,
-    Decimals = 0,
-}, function(value)
-    rage().Config.YawWays = value
-end)
-aaKids:Slider("speed", {
-    Min = 1,
-    Max = 20,
-    Default = Rage.Config.AASpeed or 6,
-    Decimals = 1,
-}, function(value)
-    rage().Config.AASpeed = value
-end)
-local fakePos = antiAim:Toggle("fake position", Rage.Config.FakePosition, function(on)
-    rage().Config.FakePosition = on
-end)
-local fakePosKids = fakePos:Children()
-fakePosKids:Slider("distance", {
-    Min = 0,
-    Max = 14,
-    Default = Rage.Config.FakePositionDistance or 4,
-    Decimals = 1,
-    Suffix = "st",
-}, function(value)
-    rage().Config.FakePositionDistance = value
-end)
-fakePosKids:Slider("height", {
-    Min = -6,
-    Max = 6,
-    Default = Rage.Config.FakePositionHeight or 0,
-    Decimals = 1,
-    Suffix = "st",
-}, function(value)
-    rage().Config.FakePositionHeight = value
-end)
-local indicators = visualizing:Toggle("rage indicators", Rage.Config.Indicators ~= false, function(on)
-    rage().Config.Indicators = on
-end)
-local indicatorKids = indicators:Children()
-local rageInd = indicatorKids:Toggle("ragebot", Rage.Config.IndicatorRagebot ~= false, function(on)
-    rage().Config.IndicatorRagebot = on
-end)
-rageInd:ColorPicker(Rage.Config.IndicatorRageActive or Color3.fromRGB(255, 255, 255), function(color)
-    rage().Config.IndicatorRageActive = color
-end)
-rageInd:ColorPicker(Rage.Config.IndicatorRageIdle or Color3.fromRGB(255, 255, 255), function(color)
-    rage().Config.IndicatorRageIdle = color
-end)
-local resInd = indicatorKids:Toggle("resolver", Rage.Config.IndicatorResolver ~= false, function(on)
-    rage().Config.IndicatorResolver = on
-end)
-resInd:ColorPicker(Rage.Config.IndicatorResolverReady or Color3.fromRGB(255, 255, 255), function(color)
-    rage().Config.IndicatorResolverReady = color
-end)
-resInd:ColorPicker(Rage.Config.IndicatorResolverCooldown or Color3.fromRGB(180, 180, 190), function(color)
-    rage().Config.IndicatorResolverCooldown = color
-end)
-
-local fakeLagEnable = fakeLag:Toggle("enable", Rage.Config.FakeLag, function(on)
-    rage().Config.FakeLag = on
-end)
-fakeLagEnable:Keybind()
-local fakeLagKids = fakeLagEnable:Children()
-fakeLagKids:Slider("amount", {
-    Min = 0,
-    Max = 2.8,
-    Default = math.clamp(tonumber(Rage.Config.FakeLagAmount) or 1.2, 0, 2.8),
-    Decimals = 1,
-    Suffix = "st",
-}, function(value)
-    rage().Config.FakeLagAmount = value
-end)
-fakeLagKids:Slider("hold", {
-    Min = 0.05,
-    Max = 3,
-    Default = Rage.Config.FakeLagHold or 0.35,
-    Decimals = 2,
-    Suffix = "s",
-}, function(value)
-    rage().Config.FakeLagHold = value
-end)
-fakeLagKids:Slider("smooth", {
-    Min = 0,
-    Max = 1,
-    Default = Rage.Config.FakeLagSmooth or 0.45,
-    Decimals = 2,
-}, function(value)
-    rage().Config.FakeLagSmooth = value
-end)
-visualizing:Toggle("rage visual", Rage.Config.RageVisual, function(on)
-    rage().Config.RageVisual = on
-end)
+    local resolver = extra:Toggle("resolver", cfg.Resolver == true, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.Resolver = on and true or false
+        end
+    end)
+    resolver:Children():Slider("strength", { Min = 1, Max = 12, Default = tonumber(cfg.ResolverStrength) or 4, Decimals = 1 }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.ResolverStrength = value
+        end
+    end)
+    local aa = extra:Toggle("anti aim", cfg.AntiAim == true, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.AntiAim = on and true or false
+        end
+    end)
+    local aaKids = aa:Children()
+    aaKids:Slider("pitch", { Min = -2, Max = 2, Default = tonumber(cfg.PitchAmount) or 0, Decimals = 2 }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.PitchAmount = value
+        end
+    end)
+    aaKids:Slider("yaw", { Min = -180, Max = 180, Default = tonumber(cfg.YawAmount) or 180 }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.YawAmount = value
+        end
+    end)
+    local fake = extra:Toggle("fake lag", cfg.FakeLag == true, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.FakeLag = on and true or false
+        end
+    end)
+    local fakeKids = fake:Children()
+    fakeKids:Slider("amount", { Min = 0.1, Max = 3, Default = tonumber(cfg.FakeLagAmount) or 1.2, Decimals = 2, Suffix = "st" }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.FakeLagAmount = value
+        end
+    end)
+    fakeKids:Slider("hold", { Min = 0.05, Max = 1, Default = tonumber(cfg.FakeLagHold) or 0.35, Decimals = 2, Suffix = "s" }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.FakeLagHold = value
+        end
+    end)
+    fakeKids:Slider("smooth", { Min = 0, Max = 1, Default = tonumber(cfg.FakeLagSmooth) or 0.45, Decimals = 2 }, function(value)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.FakeLagSmooth = value
+        end
+    end)
+    extra:Toggle("indicators", cfg.Indicators ~= false, function(on)
+        local liveCfg = getgenv().Rage and getgenv().Rage.Config
+        if liveCfg then
+            liveCfg.Indicators = on and true or false
+        end
+    end)
+    if not rage.Available then
+        Library:Notify("ragebot waiting for pf modules", 4)
+    end
+    return true
 end
-buildRageUi()
+if not buildRageUi() then
+    Library:Notify("ragebot module missing — retrying", 3)
+    task.spawn(function()
+        for _ = 1, 40 do
+            task.wait(0.25)
+            if getgenv()._TapologyMenuGen ~= menuGeneration then
+                return
+            end
+            if buildRageUi() then
+                Library:Notify("ragebot ready", 2)
+                return
+            end
+        end
+    end)
+end
 
 local function buildEspUi()
 local espBox = players:Groupbox("extra sensory shi", "left")
@@ -9148,11 +9121,11 @@ local boxCfg = boxToggle:Settings("box")
 boxCfg:Toggle("outline", ESP.Config.BoxOutline ~= false, function(on)
     esp().Config.BoxOutline = on
 end)
-boxCfg:ColorPicker("color", ESP.Config.BoxColor, function(color)
-    esp().SetColor("Box", color, 1 - ESP.Config.BoxTransparency)
+boxCfg:AlphaColorPicker("color", ESP.Config.BoxColor, 1 - ESP.Config.BoxTransparency, function(color, alpha)
+    esp().SetColor("Box", color, 1 - alpha)
 end)
-boxCfg:ColorPicker("outline", ESP.Config.OutlineColor, function(color)
-    esp().SetColor("Outline", color, 1 - ESP.Config.OutlineTransparency)
+boxCfg:AlphaColorPicker("outline", ESP.Config.OutlineColor, 1 - ESP.Config.OutlineTransparency, function(color, alpha)
+    esp().SetColor("Outline", color, 1 - alpha)
 end)
 local healthToggle = espBox:Toggle("healthbar", ESP.Config.ShowHealth, function(on)
     esp().Config.ShowHealth = on
@@ -9161,11 +9134,12 @@ local healthCfg = healthToggle:Settings("healthbar")
 healthCfg:Toggle("outline", ESP.Config.HealthOutline ~= false, function(on)
     esp().Config.HealthOutline = on
 end)
-healthCfg:ColorPicker("color", ESP.Config.HealthColor, function(color)
-    esp().SetColor("Health", color, 1 - ESP.Config.HealthTransparency)
+healthCfg:AlphaColorPicker("color", ESP.Config.HealthColor, 1 - ESP.Config.HealthTransparency, function(color, alpha)
+    esp().SetColor("Health", color, 1 - alpha)
 end)
-healthCfg:ColorPicker("low", ESP.Config.HealthLowColor, function(color)
+healthCfg:AlphaColorPicker("low", ESP.Config.HealthLowColor, 1, function(color, alpha)
     esp().Config.HealthLowColor = color
+    esp().Config.HealthLowTransparency = 1 - alpha
 end)
 local snapToggle = espBox:Toggle("snaplines", ESP.Config.Snaplines, function(on)
     esp().Config.Snaplines = on
@@ -9174,8 +9148,9 @@ local snapCfg = snapToggle:Settings("snaplines")
 snapCfg:Toggle("outline", ESP.Config.SnaplineOutline ~= false, function(on)
     esp().Config.SnaplineOutline = on
 end)
-snapCfg:ColorPicker("color", ESP.Config.SnaplineColor, function(color)
+snapCfg:AlphaColorPicker("color", ESP.Config.SnaplineColor, 1 - (ESP.Config.SnaplineTransparency or 0), function(color, alpha)
     esp().Config.SnaplineColor = color
+    esp().Config.SnaplineTransparency = 1 - alpha
 end)
 local oovToggle = espBox:Toggle("oov arrows", ESP.Config.OOV, function(on)
     esp().Config.OOV = on
@@ -9187,8 +9162,9 @@ end)
 oovCfg:Slider("size", { Min = 8, Max = 32, Default = ESP.Config.OOVSize or 16 }, function(value)
     esp().Config.OOVSize = value
 end)
-oovCfg:ColorPicker("color", ESP.Config.OOVColor, function(color)
+oovCfg:AlphaColorPicker("color", ESP.Config.OOVColor, 1 - (ESP.Config.OOVTransparency or 0), function(color, alpha)
     esp().Config.OOVColor = color
+    esp().Config.OOVTransparency = 1 - alpha
 end)
 
 local extra = players:Groupbox("extra", "right")
@@ -9217,20 +9193,20 @@ end)
 chamCfg:Toggle("visible", ESP.Config.HighlightVisible, function(on)
     esp().Config.HighlightVisible = on
 end)
-chamCfg:ColorPicker("visible fill", ESP.Config.HighlightVisibleFillColor, function(color)
-    esp().SetColor("HighlightVisibleFill", color, 1 - ESP.Config.HighlightVisibleFillTransparency)
+chamCfg:AlphaColorPicker("visible fill", ESP.Config.HighlightVisibleFillColor, 1 - ESP.Config.HighlightVisibleFillTransparency, function(color, alpha)
+    esp().SetColor("HighlightVisibleFill", color, 1 - alpha)
 end)
-chamCfg:ColorPicker("visible line", ESP.Config.HighlightVisibleOutlineColor, function(color)
-    esp().SetColor("HighlightVisibleOutline", color, 1 - ESP.Config.HighlightVisibleOutlineTransparency)
+chamCfg:AlphaColorPicker("visible line", ESP.Config.HighlightVisibleOutlineColor, 1 - ESP.Config.HighlightVisibleOutlineTransparency, function(color, alpha)
+    esp().SetColor("HighlightVisibleOutline", color, 1 - alpha)
 end)
 chamCfg:Toggle("occluded", ESP.Config.HighlightOccluded, function(on)
     esp().Config.HighlightOccluded = on
 end)
-chamCfg:ColorPicker("occluded fill", ESP.Config.HighlightOccludedFillColor, function(color)
-    esp().SetColor("HighlightOccludedFill", color, 1 - ESP.Config.HighlightOccludedFillTransparency)
+chamCfg:AlphaColorPicker("occluded fill", ESP.Config.HighlightOccludedFillColor, 1 - ESP.Config.HighlightOccludedFillTransparency, function(color, alpha)
+    esp().SetColor("HighlightOccludedFill", color, 1 - alpha)
 end)
-chamCfg:ColorPicker("occluded line", ESP.Config.HighlightOccludedOutlineColor, function(color)
-    esp().SetColor("HighlightOccludedOutline", color, 1 - ESP.Config.HighlightOccludedOutlineTransparency)
+chamCfg:AlphaColorPicker("occluded line", ESP.Config.HighlightOccludedOutlineColor, 1 - ESP.Config.HighlightOccludedOutlineTransparency, function(color, alpha)
+    esp().SetColor("HighlightOccludedOutline", color, 1 - alpha)
 end)
 end
 buildEspUi()
@@ -9475,10 +9451,18 @@ local dynamic = correctionKids:Toggle("dynamic exposure", World.Config.DynamicEx
 end)
 local dynamicKids = dynamic:Children()
 dynamicKids:Slider("min", { Min = -2, Max = 1, Default = World.Config.DynamicExposureMin, Decimals = 2 }, function(value)
-    world().Set("DynamicExposureMin", value)
+    local w = world()
+    w.Set("DynamicExposureMin", value)
+    if (tonumber(w.Config.DynamicExposureMax) or 0.8) < value then
+        w.Set("DynamicExposureMax", value)
+    end
 end)
 dynamicKids:Slider("max", { Min = 0, Max = 2, Default = World.Config.DynamicExposureMax, Decimals = 2 }, function(value)
-    world().Set("DynamicExposureMax", value)
+    local w = world()
+    w.Set("DynamicExposureMax", value)
+    if (tonumber(w.Config.DynamicExposureMin) or -0.4) > value then
+        w.Set("DynamicExposureMin", value)
+    end
 end)
 dynamicKids:Slider("speed", { Min = 0.2, Max = 8, Default = World.Config.DynamicExposureSpeed, Decimals = 1 }, function(value)
     world().Set("DynamicExposureSpeed", value)
@@ -9491,7 +9475,7 @@ local movementBox = miscTab:Groupbox("movement", "left")
 local cameraBox = miscTab:Groupbox("camera", "right")
 local tracersBox = miscTab:Groupbox("tracers", "left")
 local tracerTab = tracersBox:Subtab("tracers")
-local hitSoundTab = tracersBox:Subtab("hit sounds")
+local hitsTab = tracersBox:Subtab("hits")
 local hitLogTab = tracersBox:Subtab("hit logs")
 local aurasBox = miscTab:Groupbox("auras", "left")
 
@@ -9504,15 +9488,18 @@ local vmModifyTab = viewmodelModBox:Subtab("modify")
 local vmShootTab = viewmodelModBox:Subtab("shoot")
 local vmRemovalsTab = viewmodelModBox:Subtab("removals")
 
+movementBox:Toggle("movement bypass", Misc.Config.MovementBypass == true, function(on)
+    misc().Config.MovementBypass = on and true or false
+end)
 local walk = movementBox:Toggle("walk speed", Misc.Config.WalkSpeed, function(on)
-    misc().Config.WalkSpeed = on
+    misc().Config.WalkSpeed = on and true or false
 end)
 walk:Keybind()
-walk:Children():Slider("speed", { Min = 10, Max = 250, Default = Misc.Config.SetSpeed, Suffix = "st/s" }, function(value)
-    misc().Config.SetSpeed = value
+walk:Children():Slider("speed", { Min = 10, Max = 200, Default = math.clamp(tonumber(Misc.Config.SetSpeed) or 50, 10, 200), Suffix = "st/s" }, function(value)
+    misc().Config.SetSpeed = math.clamp(tonumber(value) or 50, 1, 200)
 end)
 local jump = movementBox:Toggle("jump power", Misc.Config.JumpPower, function(on)
-    misc().Config.JumpPower = on
+    misc().Config.JumpPower = on and true or false
 end)
 jump:Keybind()
 jump:Children():Slider("height addition", { Min = 1, Max = 15, Default = Misc.Config.HeightAddition, Suffix = "st" }, function(value)
@@ -9538,22 +9525,13 @@ movementBox:Toggle("no stamina", Misc.Config.NoStamina, function(on)
     misc().Config.NoStamina = on
 end)
 movementBox:Toggle("no movement cooldown", Misc.Config.NoMoveCooldown, function(on)
-    misc().Config.NoMoveCooldown = on
+    misc().Config.NoMoveCooldown = on and true or false
 end)
-local height = movementBox:Toggle("height bypass", Misc.Config.HeightBypass, function(on)
+movementBox:Toggle("height snap", Misc.Config.HeightBypass, function(on)
     misc().Config.HeightBypass = on
 end)
-height:Children():Slider("timer", { Min = 0.2, Max = 8, Default = Misc.Config.HeightBypassTime or 1.5, Decimals = 1, Suffix = "s" }, function(value)
+movementBox:Slider("height snap time", { Min = 0.2, Max = 8, Default = Misc.Config.HeightBypassTime or 1.5, Decimals = 1, Suffix = "s" }, function(value)
     misc().Config.HeightBypassTime = value
-end)
-movementBox:Toggle("z circle", Misc.Config.CircleJump, function(on)
-    misc().Config.CircleJump = on
-end)
-movementBox:Toggle("f zigzag", Misc.Config.ZigzagJump, function(on)
-    misc().Config.ZigzagJump = on
-end)
-movementBox:Toggle("pathfind", Misc.Config.Pathfind, function(on)
-    misc().Config.Pathfind = on
 end)
 movementBox:Slider("move smooth", { Min = 1, Max = 40, Default = Misc.Config.MoveSmooth or 12 }, function(value)
     misc().Config.MoveSmooth = value
@@ -9563,37 +9541,34 @@ local third = cameraBox:Toggle("third person", Misc.Config.ThirdPerson, function
     misc().Config.ThirdPerson = on
     if on then
         misc().Config.HideViewmodel = true
+        misc().Config.ShowCharacter = true
     end
 end)
 third:Keybind()
 local thirdKids = third:Children()
-thirdKids:Toggle("show character", Misc.Config.ShowCharacter, function(on)
+thirdKids:Toggle("render weapon", Misc.Config.ThirdPersonWeapon ~= false, function(on)
+    misc().Config.ThirdPersonWeapon = on and true or false
+end)
+thirdKids:Toggle("show character", Misc.Config.ShowCharacter ~= false, function(on)
     misc().Config.ShowCharacter = on
 end)
 thirdKids:Toggle("show while aiming", Misc.Config.ShowCharacterWhileAiming, function(on)
     misc().Config.ShowCharacterWhileAiming = on
 end)
-thirdKids:Toggle("hide viewmodel", Misc.Config.HideViewmodel ~= false, function(on)
-    misc().Config.HideViewmodel = on
+thirdKids:Toggle("hide viewmodel", Misc.Config.HideViewmodel == true, function(on)
+    misc().Config.HideViewmodel = on and true or false
 end)
-misc().Config.ApplyAntiAimToCharacter = true
-local smoothCam = thirdKids:Toggle("smooth follow", Misc.Config.CameraSmooth, function(on)
-    misc().Config.CameraSmooth = on
+misc().Config.ApplyAntiAimToCharacter = false
+local clip = thirdKids:Toggle("clip camera", Misc.Config.ThirdPersonClip ~= false, function(on)
+    misc().Config.ThirdPersonClip = on and true or false
 end)
-smoothCam:Children():Slider("smoothness", { Min = 1, Max = 40, Default = Misc.Config.CameraSmoothness, Suffix = "/s" }, function(value)
-    misc().Config.CameraSmoothness = value
+local clipKids = clip:Children()
+clipKids:Slider("minimum", { Min = 1, Max = 10, Default = tonumber(Misc.Config.ThirdPersonMinimum) or 3, Decimals = 1, Suffix = "m" }, function(value)
+    misc().Config.ThirdPersonMinimum = value
 end)
-thirdKids:Slider("offset x", { Min = -20, Max = 20, Default = Misc.Config.CameraOffsetX, Decimals = 1, Suffix = "st" }, function(value)
-    misc().Config.CameraOffsetX = value
-end)
-thirdKids:Slider("offset y", { Min = -20, Max = 20, Default = Misc.Config.CameraOffsetY, Decimals = 1, Suffix = "st" }, function(value)
-    misc().Config.CameraOffsetY = value
-end)
-thirdKids:Slider("offset z", { Min = -20, Max = 20, Default = Misc.Config.CameraOffsetZ, Decimals = 1, Suffix = "st" }, function(value)
+clipKids:Slider("maximum", { Min = 1, Max = 20, Default = tonumber(Misc.Config.ThirdPersonMaximum) or 8, Decimals = 1, Suffix = "m" }, function(value)
+    misc().Config.ThirdPersonMaximum = value
     misc().Config.CameraOffsetZ = value
-end)
-thirdKids:Toggle("always visible", Misc.Config.CameraOffsetAlwaysVisible, function(on)
-    misc().Config.CameraOffsetAlwaysVisible = on
 end)
 local fovCam = cameraBox:Toggle("fov", Misc.Config.FOV, function(on)
     misc().Config.FOV = on
@@ -9660,6 +9635,18 @@ end)
 crossKids:Slider("length", { Min = 1, Max = 40, Default = Misc.Config.CrosshairLength or 8 }, function(value)
     misc().Config.CrosshairLength = value
 end)
+crossKids:Slider("fade in", { Min = 0, Max = 1, Default = tonumber(Misc.Config.CrosshairFadeIn) or 0, Decimals = 2 }, function(value)
+    misc().Config.CrosshairFadeIn = value
+end)
+crossKids:Slider("fade out", { Min = 0, Max = 1, Default = tonumber(Misc.Config.CrosshairFadeOut) or 0, Decimals = 2 }, function(value)
+    misc().Config.CrosshairFadeOut = value
+end)
+local crossOutline = crossKids:Toggle("outline", Misc.Config.CrosshairOutline == true, function(on)
+    misc().Config.CrosshairOutline = on and true or false
+end)
+crossOutline:ColorPicker(Misc.Config.CrosshairOutlineColor or Color3.new(0, 0, 0), function(color)
+    misc().Config.CrosshairOutlineColor = color
+end)
 crossKids:Slider("bounce", { Min = 0, Max = 20, Default = Misc.Config.CrosshairBounce or 0 }, function(value)
     misc().Config.CrosshairBounce = value
 end)
@@ -9673,33 +9660,36 @@ crossKids:Slider("spin speed", { Min = 0, Max = 360, Default = Misc.Config.Cross
     misc().Config.CrosshairSpinSpeed = value
 end)
 
-local removalsEnable = vmRemovalsTab:Toggle("enable", Misc.Config.Removals, function(on)
-    misc().Config.Removals = on
+local function syncMiscRemovals()
     local cfg = misc().Config
-    cfg.RemoveDecals = on and cfg.RemoveItems and cfg.RemoveItems.decals or false
-    cfg.RemoveArms = on and cfg.RemoveItems and cfg.RemoveItems.arms or false
-    cfg.RemoveAnimations = on and cfg.RemoveItems and cfg.RemoveItems.animations or false
-    cfg.RemoveTeam = on and cfg.RemoveItems and cfg.RemoveItems.team or false
-    cfg.RemoveEnemy = on and cfg.RemoveItems and cfg.RemoveItems.enemy or false
-    cfg.RemoveExplosions = on and cfg.RemoveItems and cfg.RemoveItems.explosions or false
-    cfg.RemoveDroppedGuns = on and cfg.RemoveItems and cfg.RemoveItems.dropped or false
+    local on = cfg.Removals == true
+    local items = type(cfg.RemoveItems) == "table" and cfg.RemoveItems or {}
+    if items.decals ~= nil then
+        items.decals = nil
+    end
+    cfg.RemoveDecals = false
+    cfg.RemoveArms = on and items.arms == true
+    cfg.RemoveAnimations = on and items.animations == true
+    cfg.RemoveTeam = on and items.team == true
+    cfg.RemoveEnemy = on and items.enemy == true
+    cfg.RemoveExplosions = on and items.explosions == true
+    cfg.RemoveDroppedGuns = on and items.dropped == true
+end
+local removalsEnable = vmRemovalsTab:Toggle("enable", Misc.Config.Removals, function(on)
+    misc().Config.Removals = on and true or false
+    syncMiscRemovals()
 end)
 local removalKids = removalsEnable:Children()
 removalKids:Dropdown("items", {
     Multi = true,
-    Values = { "decals", "arms", "animations", "team", "enemy", "explosions", "dropped" },
+    Values = { "arms", "animations", "team", "enemy", "explosions", "dropped" },
     Default = Misc.Config.RemoveItems or {},
 }, function(value)
+    if type(value) == "table" then
+        value.decals = nil
+    end
     misc().Config.RemoveItems = value
-    local cfg = misc().Config
-    local on = cfg.Removals == true
-    cfg.RemoveDecals = on and value.decals or false
-    cfg.RemoveArms = on and value.arms or false
-    cfg.RemoveAnimations = on and value.animations or false
-    cfg.RemoveTeam = on and value.team or false
-    cfg.RemoveEnemy = on and value.enemy or false
-    cfg.RemoveExplosions = on and value.explosions or false
-    cfg.RemoveDroppedGuns = on and value.dropped or false
+    syncMiscRemovals()
 end)
 removalKids:Dropdown("hud", {
     Multi = true,
@@ -9762,10 +9752,13 @@ tracerKids:Slider("max distance", { Min = 100, Max = 3000, Default = Tracers.Con
     tracers().Config.MaxDistance = value
 end)
 
-local hitSounds = hitSoundTab:Toggle("enable", Tracers.Config.HitSounds, function(on)
+local hitSounds = hitsTab:Toggle("sound", Tracers.Config.HitSounds, function(on)
     tracers().Config.HitSounds = on
 end)
 local hitSoundKids = hitSounds:Children()
+hitSoundKids:Toggle("mute game sounds", Tracers.Config.MuteGameHitSounds ~= false, function(on)
+    tracers().Config.MuteGameHitSounds = on
+end)
 local hitSoundNames = Tracers.HitSounds or {}
 if #hitSoundNames == 0 and Tracers.Config.HitSoundIds then
     for name in Tracers.Config.HitSoundIds do
@@ -9793,6 +9786,67 @@ hitSoundKids:Button("preview", function()
         t.PlayHitSound()
         t.Config.HitSounds = was
     end
+end)
+
+local hitMarkers = hitsTab:Toggle("hitmarkers", Misc.Config.HitMarkers == true, function(on)
+    misc().Config.HitMarkers = on and true or false
+end)
+hitMarkers:AlphaColorPicker(Misc.Config.HitMarkerColor1, tonumber(Misc.Config.HitMarkerAlpha1) or 1, function(color, alpha)
+    misc().Config.HitMarkerColor1 = color
+    misc().Config.HitMarkerAlpha1 = alpha
+end)
+hitMarkers:AlphaColorPicker(Misc.Config.HitMarkerColor2, tonumber(Misc.Config.HitMarkerAlpha2) or 1, function(color, alpha)
+    misc().Config.HitMarkerColor2 = color
+    misc().Config.HitMarkerAlpha2 = alpha
+end)
+hitMarkers:AlphaColorPicker(Misc.Config.HitMarkerColor3, tonumber(Misc.Config.HitMarkerAlpha3) or 1, function(color, alpha)
+    misc().Config.HitMarkerColor3 = color
+    misc().Config.HitMarkerAlpha3 = alpha
+end)
+hitMarkers:AlphaColorPicker(Misc.Config.HitMarkerColor4, tonumber(Misc.Config.HitMarkerAlpha4) or 1, function(color, alpha)
+    misc().Config.HitMarkerColor4 = color
+    misc().Config.HitMarkerAlpha4 = alpha
+end)
+local hitMarkerKids = hitMarkers:Children()
+hitMarkerKids:Dropdown("mode", {
+    Multi = true,
+    Values = { "2d", "3d" },
+    Default = (function()
+        local raw = Misc.Config.HitMarkerModes
+        if type(raw) == "table" and (raw["2d"] or raw["3d"] or raw[1]) then
+            return raw
+        end
+        if Misc.Config.HitMarkerMode == "3d" then
+            return { ["3d"] = true }
+        end
+        return { ["2d"] = true }
+    end)(),
+}, function(value)
+    misc().Config.HitMarkerModes = value
+end)
+hitMarkerKids:Slider("thickness", { Min = 1, Max = 8, Default = tonumber(Misc.Config.HitMarkerThickness) or 2 }, function(value)
+    misc().Config.HitMarkerThickness = value
+end)
+hitMarkerKids:Slider("gap", { Min = 0, Max = 30, Default = tonumber(Misc.Config.HitMarkerGap) or 4 }, function(value)
+    misc().Config.HitMarkerGap = value
+end)
+hitMarkerKids:Slider("length", { Min = 1, Max = 40, Default = tonumber(Misc.Config.HitMarkerLength) or 10 }, function(value)
+    misc().Config.HitMarkerLength = value
+end)
+hitMarkerKids:Slider("fade in", { Min = 0, Max = 1, Default = tonumber(Misc.Config.HitMarkerFadeIn) or 0, Decimals = 2 }, function(value)
+    misc().Config.HitMarkerFadeIn = value
+end)
+hitMarkerKids:Slider("fade out", { Min = 0, Max = 1, Default = tonumber(Misc.Config.HitMarkerFadeOut) or 0, Decimals = 2 }, function(value)
+    misc().Config.HitMarkerFadeOut = value
+end)
+local hmOutline = hitMarkerKids:Toggle("outline", Misc.Config.HitMarkerOutline == true, function(on)
+    misc().Config.HitMarkerOutline = on and true or false
+end)
+hmOutline:ColorPicker(Misc.Config.HitMarkerOutlineColor or Color3.new(0, 0, 0), function(color)
+    misc().Config.HitMarkerOutlineColor = color
+end)
+hitMarkerKids:Slider("duration", { Min = 0.05, Max = 1.5, Default = tonumber(Misc.Config.HitMarkerDuration) or 0.35, Decimals = 2, Suffix = "s" }, function(value)
+    misc().Config.HitMarkerDuration = value
 end)
 
 local hitLogs = hitLogTab:Toggle("enable", Tracers.Config.HitLogs, function(on)
@@ -9968,11 +10022,9 @@ armsKids:Dropdown("material", {
 }, function(value)
     misc().Config.ArmsChamsMaterial = value
 end)
-armsKids:ColorPicker("color", Misc.Config.ArmsChamsColor or Color3.fromRGB(108, 147, 255), function(color)
+armsKids:AlphaColorPicker("color", Misc.Config.ArmsChamsColor or Color3.fromRGB(108, 147, 255), 1 - (Misc.Config.ArmsChamsAlpha or 0), function(color, alpha)
     misc().Config.ArmsChamsColor = color
-end)
-armsKids:Slider("alpha", { Min = 0, Max = 0.92, Default = Misc.Config.ArmsChamsAlpha or 0, Decimals = 2 }, function(value)
-    misc().Config.ArmsChamsAlpha = value
+    misc().Config.ArmsChamsAlpha = 1 - alpha
 end)
 
 local bodyChams = vmModifyTab:Toggle("body", Misc.Config.BodyChams, function(on)
@@ -9985,11 +10037,9 @@ bodyKids:Dropdown("material", {
 }, function(value)
     misc().Config.BodyChamsMaterial = value
 end)
-bodyKids:ColorPicker("color", Misc.Config.BodyChamsColor or Color3.fromRGB(255, 190, 150), function(color)
+bodyKids:AlphaColorPicker("color", Misc.Config.BodyChamsColor or Color3.fromRGB(255, 190, 150), 1 - (Misc.Config.BodyChamsAlpha or 0), function(color, alpha)
     misc().Config.BodyChamsColor = color
-end)
-bodyKids:Slider("alpha", { Min = 0, Max = 0.92, Default = Misc.Config.BodyChamsAlpha or 0, Decimals = 2 }, function(value)
-    misc().Config.BodyChamsAlpha = value
+    misc().Config.BodyChamsAlpha = 1 - alpha
 end)
 
 local weaponChams = vmModifyTab:Toggle("weapon", Misc.Config.WeaponChams, function(on)
@@ -10002,17 +10052,18 @@ weaponKids:Dropdown("material", {
 }, function(value)
     misc().Config.WeaponChamsMaterial = value
 end)
-weaponKids:ColorPicker("color", Misc.Config.WeaponChamsColor or Color3.fromRGB(108, 147, 255), function(color)
+weaponKids:AlphaColorPicker("color", Misc.Config.WeaponChamsColor or Color3.fromRGB(108, 147, 255), 1 - (Misc.Config.WeaponChamsAlpha or 0), function(color, alpha)
     misc().Config.WeaponChamsColor = color
-end)
-weaponKids:Slider("alpha", { Min = 0, Max = 0.92, Default = Misc.Config.WeaponChamsAlpha or 0, Decimals = 2 }, function(value)
-    misc().Config.WeaponChamsAlpha = value
+    misc().Config.WeaponChamsAlpha = 1 - alpha
 end)
 
 local shootOn = vmShootTab:Toggle("enable", Misc.Config.ShootSounds, function(on)
     misc().Config.ShootSounds = on
 end)
 local shootKids = shootOn:Children()
+shootKids:Toggle("mute game sounds", Misc.Config.MuteGameShootSounds ~= false, function(on)
+    misc().Config.MuteGameShootSounds = on
+end)
 local shootNames = Misc.ShootSounds or {}
 if #shootNames == 0 and Misc.Config.ShootSoundIds then
     for name in Misc.Config.ShootSoundIds do
@@ -10371,6 +10422,9 @@ tag("UIStroke", {
     Color = UI.Config.Theme.Outline,
     Parent = popup,
 })
+if type(UI.PolishOverlay) == "function" then
+    UI.PolishOverlay(popup, { Shadow = true, ShadowPad = 24, ShadowTransparency = 0.42, Gloss = false })
+end
 tag("UIListLayout", {
     SortOrder = Enum.SortOrder.LayoutOrder,
     Padding = UDim.new(0, 2),
@@ -10460,7 +10514,9 @@ openPopup = function(player)
     local mouse = UserInputService:GetMouseLocation()
     local camera = workspace.CurrentCamera
     local vs = camera and camera.ViewportSize or Vector2.new(1280, 720)
-    popup.Position = UDim2.fromOffset(math.clamp(mouse.X, 0, math.max(vs.X - 124, 0)), math.clamp(mouse.Y, 0, math.max(vs.Y - 110, 0)))
+    local maxX = math.max(vs.X - 124, 0)
+    local maxY = math.max(vs.Y - 110, 0)
+    popup.Position = UDim2.fromOffset(math.clamp(mouse.X, 0, maxX), math.clamp(mouse.Y, 0, maxY))
     popupBlocker.Visible = true
     popup.Visible = true
     paintChrome()
@@ -10958,8 +11014,12 @@ else
             end
         end
     end
-    if count1 >= 7 then
+    if count1 >= 6 then
         getgenv()._TapologyMenuBuilt = menuGeneration
+        local purge = getgenv()._TapologyPurgeGuis
+        if type(purge) == "function" then
+            purge(Library and Library.Gui)
+        end
     else
         getgenv()._TapologyMenuBuilt = nil
         getgenv()._TapologyMenuErr = "incomplete tab strip (" .. tostring(count1) .. ")"
@@ -10967,9 +11027,7 @@ else
 end
 end
 task.defer(buildTapologyMenu)
-task.delay(0.2, buildTapologyMenu)
-task.delay(0.75, buildTapologyMenu)
-task.delay(1.5, buildTapologyMenu)
-task.delay(3, buildTapologyMenu)
+task.delay(0.35, buildTapologyMenu)
+task.delay(1.25, buildTapologyMenu)
 getgenv()._TapologyScriptTail = os.clock()
 getgenv()._TapologyMenuGenAtTail = menuGeneration
