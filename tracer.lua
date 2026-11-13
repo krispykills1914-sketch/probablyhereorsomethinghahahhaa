@@ -32,6 +32,7 @@ local Config = {
     Width = 1,
     Lifetime = 1,
     HitSounds = false,
+    MuteGameHitSounds = true,
     HitSound = "Impact",
     HitSoundVolume = 1,
     HitSoundPitch = 1,
@@ -908,10 +909,18 @@ local function main()
         end
     end)
 
+    local function ragebotActive()
+        local rage = env.Rage
+        return type(rage) == "table" and type(rage.Config) == "table" and rage.Config.Enabled == true
+    end
+
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     table.insert(Connections, UserInputService.InputBegan:Connect(function(input, processed)
         if processed or not Config.Enabled or not Config.OnShoot or input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        if ragebotActive() then
+            return
+        end
         local character = LocalPlayer.Character
         local tool = character and character:FindFirstChildOfClass("Tool")
         local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -940,6 +949,9 @@ local function main()
     end
     local okModules, modules = pcall(findModules)
     modules = okModules and modules or nil
+    if modules then
+        env._TapologyModules = modules
+    end
 
     local lastHitSoundAt = 0
     local function playHitSound(force)
@@ -1017,26 +1029,52 @@ local function main()
     end
 
     local armedHits = {}
-    local function notifyHit(player, part)
+    local markerHits = {}
+
+    local function notifyHitMarker(player, partOrPos)
+        local onMarker = env._TapologyOnHitMarker
+        if type(onMarker) ~= "function" then
+            return
+        end
+        local key = tostring(player)
+        local now = os.clock()
+        if markerHits[key] and now - markerHits[key] < 0.03 then
+            return
+        end
+        markerHits[key] = now
+        pcall(onMarker, player, partOrPos)
+    end
+
+    local function notifyHit(player, partOrPos)
         if Config.HitSounds then
             playHitSound(true)
         end
+        notifyHitMarker(player, partOrPos)
         if Config.HitLogs then
             local rage = env.Rage
+            local label = partOrPos
+            if typeof(partOrPos) == "Vector3" then
+                label = nil
+            end
             if rage and rage.LogHit then
-                rage.LogHit(player.Name, part)
+                rage.LogHit(player.Name, label)
             else
                 local ui = env.Tapology or env.Library
                 if ui and ui.Notify then
-                    ui:Notify(string.format("hit ( %s )%s", player.Name, part and (" · " .. tostring(part)) or ""), Config.HitLogDuration or 3.5)
+                    ui:Notify(string.format("hit ( %s )%s", player.Name, label and (" · " .. tostring(label)) or ""), Config.HitLogDuration or 3.5)
                 end
             end
         end
     end
 
-    local function armManualHit(player, part)
+    local function armManualHit(player, partOrPos, opts)
         if not player or player == LocalPlayer then
             return
+        end
+        opts = opts or {}
+
+        if opts.marker ~= false then
+            notifyHitMarker(player, partOrPos)
         end
         if os.clock() < (env._TapologySkipHitLogUntil or 0) then
             return
@@ -1051,7 +1089,6 @@ local function main()
             hpBefore = 100
         end
         task.spawn(function()
-
             for _ = 1, 14 do
                 task.wait(0.07)
                 if Unloaded then
@@ -1065,7 +1102,25 @@ local function main()
                 local damaged = typeof(hpAfter) == "number" and hpAfter < hpBefore - 0.15
                 local dead = entry and (entry._alive == false or (typeof(hpAfter) == "number" and hpAfter <= 0))
                 if damaged or dead then
-                    notifyHit(player, part)
+
+                    if Config.HitSounds then
+                        playHitSound(true)
+                    end
+                    if Config.HitLogs then
+                        local rage = env.Rage
+                        local label = partOrPos
+                        if typeof(partOrPos) == "Vector3" then
+                            label = nil
+                        end
+                        if rage and rage.LogHit then
+                            rage.LogHit(player.Name, label)
+                        else
+                            local ui = env.Tapology or env.Library
+                            if ui and ui.Notify then
+                                ui:Notify(string.format("hit ( %s )%s", player.Name, label and (" · " .. tostring(label)) or ""), Config.HitLogDuration or 3.5)
+                            end
+                        end
+                    end
                     return
                 end
                 if typeof(hpAfter) == "number" then
@@ -1075,40 +1130,83 @@ local function main()
         end)
     end
 
+    local function muzzlePosition(fallback)
+        local from = fallback
+        local weapons = modules and modules.WeaponControllerInterface
+        local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
+        local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
+        local barrel = weapon and weapon._barrelPart
+        if typeof(barrel) == "Instance" and barrel:IsA("BasePart") then
+            from = barrel.Position + barrel.CFrame.LookVector * math.max(barrel.Size.Z * 0.5, 0.05)
+        end
+        return from, weapon
+    end
+
+    local function fireMuzzleToImpact(from, direction, styleName, force)
+
+        if not force and ragebotActive() then
+            return
+        end
+        if typeof(from) ~= "Vector3" or typeof(direction) ~= "Vector3" or direction.Magnitude < 1e-4 then
+            return
+        end
+        direction = direction.Unit
+        local ignore = { workspace.CurrentCamera, Container }
+        local playersFolder = workspace:FindFirstChild("Players")
+        local ignoreFolder = workspace:FindFirstChild("Ignore")
+        if playersFolder then
+            ignore[#ignore + 1] = playersFolder
+        end
+        if ignoreFolder then
+            ignore[#ignore + 1] = ignoreFolder
+        end
+        local character = LocalPlayer.Character
+        if character then
+            ignore[#ignore + 1] = character
+        end
+        rayParams.FilterDescendantsInstances = ignore
+        local maxDist = math.clamp(tonumber(Config.MaxDistance) or 2000, 50, 5000)
+        local hit = workspace:Raycast(from, direction * maxDist, rayParams)
+        local to = hit and hit.Position or (from + direction * maxDist)
+        task.defer(fire, from, to, styleName or Config.Style, hit and hit.Instance, force)
+    end
+
+    local function unpackBulletHit(...)
+        local args = table.pack(...)
+        local player, hitPos, partName
+        for i = 1, args.n do
+            local value = args[i]
+            if typeof(value) == "Instance" and value:IsA("Player") and not player then
+                player = value
+            elseif typeof(value) == "Vector3" and not hitPos then
+                hitPos = value
+            elseif typeof(value) == "Instance" and value:IsA("BasePart") and not hitPos then
+                hitPos = value
+            elseif type(value) == "string" and not partName then
+                partName = value
+            elseif type(value) == "table" and typeof(value._player) == "Instance" and not player then
+                player = value._player
+            end
+        end
+        return player, hitPos or partName
+    end
+
     if modules and modules.BulletObject and type(modules.BulletObject.new) == "function" then
         local nextNew = modules.BulletObject.new
         modules.BulletObject.new = function(data, ...)
             if type(data) == "table" and data.onplayerhit then
                 local prevHit = data.onplayerhit
                 data.onplayerhit = function(...)
+                    local player, where = unpackBulletHit(...)
+                    if player and player ~= LocalPlayer then
 
-                    local args = table.pack(...)
-                    for i = 1, args.n do
-                        local value = args[i]
-                        if typeof(value) == "Instance" and value:IsA("Player") then
-                            armManualHit(value, nil)
-                            break
-                        elseif type(value) == "table" and typeof(value._player) == "Instance" then
-                            armManualHit(value._player, nil)
-                            break
-                        end
+                        armManualHit(player, where)
                     end
                     return prevHit(...)
                 end
-                if Config.Enabled and data.position and data.velocity then
-                    local from = data.position
-                    local weapons = modules.WeaponControllerInterface
-                    local controller = weapons and weapons.getActiveWeaponController and weapons.getActiveWeaponController()
-                    local weapon = controller and controller.getActiveWeapon and controller:getActiveWeapon()
-                    local barrel = weapon and weapon._barrelPart
-                    if barrel then
-                        from = barrel.Position + barrel.CFrame.LookVector * (barrel.Size.Z * 0.5)
-                    end
-                    local direction = data.velocity.Unit
-                    rayParams.FilterDescendantsInstances = { workspace.CurrentCamera, Container, workspace:FindFirstChild("Ignore"), workspace:FindFirstChild("Players") }
-                    local hit = workspace:Raycast(from, direction * Config.MaxDistance, rayParams)
-                    local to = hit and hit.Position or (from + direction * Config.MaxDistance)
-                    task.defer(fire, from, to, Config.Style, nil)
+                if Config.Enabled and typeof(data.position) == "Vector3" and typeof(data.velocity) == "Vector3" and data.velocity.Magnitude > 1e-4 then
+                    local from = muzzlePosition(data.position)
+                    fireMuzzleToImpact(from, data.velocity, Config.Style, false)
                 end
             end
             return nextNew(data, ...)
@@ -1122,11 +1220,34 @@ local function main()
         local network = modules.NetworkClient
         local nextSend = network.send
         network.send = function(self, name, ...)
-            if name == "bullethit" then
-                local _, player, _, part = ...
-                if typeof(player) == "Instance" and player:IsA("Player") then
-                    armManualHit(player, part)
+            local eventName = name
+            local a = table.pack(...)
+
+            if type(self) == "string" then
+                eventName = self
+                a = table.pack(name, ...)
+            end
+            if eventName == "newbullets" and Config.Enabled then
+                local bulletData = a[2]
+                if type(bulletData) == "table" then
+                    local bullets = bulletData.bullets
+                    local first = type(bullets) == "table" and bullets[1]
+                    local direction = type(first) == "table" and first[1]
+                    local fallback = bulletData.firepos or bulletData.camerapos
+                    if typeof(direction) == "Vector3" and typeof(fallback) == "Vector3" then
+                        local from = muzzlePosition(fallback)
+                        fireMuzzleToImpact(from, direction, Config.Style, false)
+                    end
                 end
+            elseif eventName == "bullethit" then
+
+                local player, where = unpackBulletHit(table.unpack(a, 1, a.n))
+                if player and player ~= LocalPlayer then
+                    armManualHit(player, where)
+                end
+            end
+            if type(self) == "string" then
+                return nextSend(self, name, ...)
             end
             return nextSend(self, name, ...)
         end
